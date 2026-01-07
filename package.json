@@ -220,6 +220,12 @@
         "title": "Toggle Notification Level (All/Milestone/None)",
         "icon": "$(bell)",
         "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.togglePushStrategy",
+        "title": "Toggle Push Strategy (Milestone/All/None)",
+        "icon": "$(cloud-upload)",
+        "category": "Vibe Guardian"
       }
     ],
     "menus": {
