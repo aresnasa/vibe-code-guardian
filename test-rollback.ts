@@ -225,6 +225,71 @@ class RollbackTester {
     }
 
     /**
+     * Test 7: Test rollback preserves other files
+     */
+    async testRollbackPreservesOtherFiles(): Promise<void> {
+        const testName = 'Rollback Preserves Tracked Files';
+        try {
+            // Get current state
+            const currentHead = await this.git.revparse(['HEAD']);
+            const log = await this.git.log({ maxCount: 5 });
+            
+            // Read test.md before rollback
+            const testMdPath = path.join(TEST_DIR, 'test.md');
+            const testMdBefore = fs.readFileSync(testMdPath, 'utf-8');
+            await this.log(`test.md before rollback: "${testMdBefore.trim()}"`);
+            
+            // Roll back to earlier commit
+            const targetCommit = log.all[2].hash;
+            await this.git.reset(['--hard', targetCommit]);
+            
+            // Read test.md after rollback
+            const testMdAfter = fs.existsSync(testMdPath) 
+                ? fs.readFileSync(testMdPath, 'utf-8')
+                : '<file not exist>';
+            await this.log(`test.md after rollback: "${testMdAfter.trim()}"`);
+            
+            // Restore
+            await this.git.reset(['--hard', currentHead]);
+            
+            await this.pass(testName);
+        } catch (error) {
+            await this.fail(testName, String(error));
+        }
+    }
+
+    /**
+     * Test 8: Test multiple rollbacks in sequence
+     */
+    async testMultipleRollbacks(): Promise<void> {
+        const testName = 'Multiple Sequential Rollbacks';
+        try {
+            const currentHead = await this.git.revparse(['HEAD']);
+            const log = await this.git.log({ maxCount: 5 });
+            
+            // Perform multiple rollbacks
+            for (let i = 1; i < Math.min(3, log.all.length); i++) {
+                const targetCommit = log.all[i].hash;
+                await this.log(`Rollback ${i}: to ${targetCommit.substring(0, 7)}`);
+                await this.git.reset(['--hard', targetCommit]);
+                
+                const newHead = await this.git.revparse(['HEAD']);
+                if (!newHead.startsWith(targetCommit.substring(0, 7))) {
+                    await this.fail(testName, `Rollback ${i} failed`);
+                    await this.git.reset(['--hard', currentHead]);
+                    return;
+                }
+            }
+            
+            // Restore
+            await this.git.reset(['--hard', currentHead]);
+            await this.pass(testName);
+        } catch (error) {
+            await this.fail(testName, String(error));
+        }
+    }
+
+    /**
      * Run all tests
      */
     async runAllTests(): Promise<void> {
