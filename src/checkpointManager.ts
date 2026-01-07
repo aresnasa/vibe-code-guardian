@@ -1,0 +1,458 @@
+/**
+ * Vibe Code Guardian - Checkpoint Manager
+ * Core logic for creating, managing, and organizing checkpoints
+ */
+
+import * as vscode from 'vscode';
+import * as crypto from 'crypto';
+import {
+    Checkpoint,
+    CheckpointType,
+    CheckpointSource,
+    CodingSession,
+    CheckpointStorageData,
+    GuardianSettings,
+    ChangedFile,
+    DEFAULT_SETTINGS
+} from './types';
+import { GitManager } from './gitManager';
+
+export class CheckpointManager {
+    private context: vscode.ExtensionContext;
+    private gitManager: GitManager;
+    private storageData: CheckpointStorageData;
+    private _onCheckpointCreated: vscode.EventEmitter<Checkpoint> = new vscode.EventEmitter<Checkpoint>();
+    private _onCheckpointDeleted: vscode.EventEmitter<string> = new vscode.EventEmitter<string>();
+    private _onSessionChanged: vscode.EventEmitter<CodingSession | undefined> = new vscode.EventEmitter<CodingSession | undefined>();
+
+    public readonly onCheckpointCreated: vscode.Event<Checkpoint> = this._onCheckpointCreated.event;
+    public readonly onCheckpointDeleted: vscode.Event<string> = this._onCheckpointDeleted.event;
+    public readonly onSessionChanged: vscode.Event<CodingSession | undefined> = this._onSessionChanged.event;
+
+    constructor(context: vscode.ExtensionContext, gitManager: GitManager) {
+        this.context = context;
+        this.gitManager = gitManager;
+        this.storageData = this.loadStorageData();
+    }
+
+    /**
+     * Load storage data from workspace state
+     */
+    private loadStorageData(): CheckpointStorageData {
+        const data = this.context.workspaceState.get<CheckpointStorageData>('vibeCodeGuardian.data');
+        if (data && data.version === 1) {
+            return data;
+        }
+        return {
+            version: 1,
+            checkpoints: [],
+            sessions: [],
+            activeSessionId: undefined,
+            settings: DEFAULT_SETTINGS
+        };
+    }
+
+    /**
+     * Save storage data to workspace state
+     */
+    private async saveStorageData(): Promise<void> {
+        await this.context.workspaceState.update('vibeCodeGuardian.data', this.storageData);
+    }
+
+    /**
+     * Generate a unique ID
+     */
+    private generateId(): string {
+        return crypto.randomBytes(8).toString('hex');
+    }
+
+    /**
+     * Generate checkpoint name based on pattern
+     */
+    private generateCheckpointName(type: CheckpointType, source: CheckpointSource): string {
+        const now = new Date();
+        const timestamp = now.toLocaleString('zh-CN', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        }).replace(/\//g, '-');
+
+        const typeEmoji: Record<CheckpointType, string> = {
+            [CheckpointType.Auto]: '🔄',
+            [CheckpointType.Manual]: '💾',
+            [CheckpointType.AIGenerated]: '🤖',
+            [CheckpointType.SessionStart]: '🎮',
+            [CheckpointType.AutoSave]: '⏰'
+        };
+
+        const sourceLabel: Record<CheckpointSource, string> = {
+            [CheckpointSource.User]: 'Manual',
+            [CheckpointSource.Copilot]: 'Copilot',
+            [CheckpointSource.Claude]: 'Claude',
+            [CheckpointSource.Cline]: 'Cline',
+            [CheckpointSource.OtherAI]: 'AI',
+            [CheckpointSource.AutoSave]: 'AutoSave',
+            [CheckpointSource.FileWatcher]: 'Watcher',
+            [CheckpointSource.Unknown]: 'Unknown'
+        };
+
+        return `${typeEmoji[type]} ${sourceLabel[source]} @ ${timestamp}`;
+    }
+
+    /**
+     * Get current settings
+     */
+    public getSettings(): GuardianSettings {
+        return { ...this.storageData.settings };
+    }
+
+    /**
+     * Update settings
+     */
+    public async updateSettings(settings: Partial<GuardianSettings>): Promise<void> {
+        this.storageData.settings = { ...this.storageData.settings, ...settings };
+        await this.saveStorageData();
+    }
+
+    /**
+     * Get all checkpoints
+     */
+    public getCheckpoints(): Checkpoint[] {
+        return [...this.storageData.checkpoints].sort((a, b) => b.timestamp - a.timestamp);
+    }
+
+    /**
+     * Get checkpoint by ID
+     */
+    public getCheckpoint(id: string): Checkpoint | undefined {
+        return this.storageData.checkpoints.find(cp => cp.id === id);
+    }
+
+    /**
+     * Get checkpoints for current session
+     */
+    public getSessionCheckpoints(sessionId?: string): Checkpoint[] {
+        const sid = sessionId || this.storageData.activeSessionId;
+        if (!sid) {
+            return [];
+        }
+        return this.storageData.checkpoints
+            .filter(cp => cp.sessionId === sid)
+            .sort((a, b) => b.timestamp - a.timestamp);
+    }
+
+    /**
+     * Create a new checkpoint
+     */
+    public async createCheckpoint(
+        type: CheckpointType,
+        source: CheckpointSource,
+        changedFiles: ChangedFile[],
+        options?: {
+            name?: string;
+            description?: string;
+            tags?: string[];
+        }
+    ): Promise<Checkpoint> {
+        // Ensure we have an active session
+        if (!this.storageData.activeSessionId) {
+            await this.startSession();
+        }
+
+        const id = this.generateId();
+        const name = options?.name || this.generateCheckpointName(type, source);
+
+        // Get Git commit if enabled
+        let gitCommitHash: string | undefined;
+        if (this.storageData.settings.enableGit && await this.gitManager.isGitRepository()) {
+            try {
+                const commitMessage = `[Vibe Guardian] ${name}`;
+                gitCommitHash = await this.gitManager.createCommit(
+                    changedFiles.map(f => f.path),
+                    commitMessage
+                );
+            } catch (error) {
+                console.warn('Failed to create Git commit:', error);
+            }
+        }
+
+        // Find parent checkpoint
+        const sessionCheckpoints = this.getSessionCheckpoints();
+        const parentId = sessionCheckpoints.length > 0 ? sessionCheckpoints[0].id : undefined;
+
+        const checkpoint: Checkpoint = {
+            id,
+            name,
+            description: options?.description,
+            timestamp: Date.now(),
+            gitCommitHash,
+            type,
+            source,
+            changedFiles,
+            sessionId: this.storageData.activeSessionId!,
+            parentId,
+            tags: options?.tags || [],
+            starred: false,
+            branchName: this.getActiveSession()?.branchName
+        };
+
+        this.storageData.checkpoints.push(checkpoint);
+
+        // Update session
+        const session = this.getActiveSession();
+        if (session) {
+            session.checkpointIds.push(id);
+            session.totalFilesChanged += changedFiles.length;
+            if (source !== CheckpointSource.User && source !== CheckpointSource.AutoSave && source !== CheckpointSource.FileWatcher) {
+                if (!session.aiToolsUsed.includes(source)) {
+                    session.aiToolsUsed.push(source);
+                }
+            }
+        }
+
+        // Enforce max checkpoints limit
+        await this.enforceCheckpointLimit();
+
+        await this.saveStorageData();
+        this._onCheckpointCreated.fire(checkpoint);
+
+        // Show notification if enabled
+        if (this.storageData.settings.showNotifications) {
+            vscode.window.showInformationMessage(
+                `💾 Checkpoint saved: ${name}`,
+                'View Timeline'
+            ).then(selection => {
+                if (selection === 'View Timeline') {
+                    vscode.commands.executeCommand('vibeCodeGuardian.showTimeline');
+                }
+            });
+        }
+
+        return checkpoint;
+    }
+
+    /**
+     * Delete a checkpoint
+     */
+    public async deleteCheckpoint(id: string): Promise<boolean> {
+        const index = this.storageData.checkpoints.findIndex(cp => cp.id === id);
+        if (index === -1) {
+            return false;
+        }
+
+        const checkpoint = this.storageData.checkpoints[index];
+        
+        // Update child checkpoints to point to parent
+        this.storageData.checkpoints.forEach(cp => {
+            if (cp.parentId === id) {
+                cp.parentId = checkpoint.parentId;
+            }
+        });
+
+        // Remove from session
+        const session = this.storageData.sessions.find(s => s.id === checkpoint.sessionId);
+        if (session) {
+            session.checkpointIds = session.checkpointIds.filter(cpId => cpId !== id);
+        }
+
+        this.storageData.checkpoints.splice(index, 1);
+        await this.saveStorageData();
+        this._onCheckpointDeleted.fire(id);
+
+        return true;
+    }
+
+    /**
+     * Toggle checkpoint starred status
+     */
+    public async toggleStarred(id: string): Promise<boolean> {
+        const checkpoint = this.getCheckpoint(id);
+        if (!checkpoint) {
+            return false;
+        }
+        checkpoint.starred = !checkpoint.starred;
+        await this.saveStorageData();
+        return checkpoint.starred;
+    }
+
+    /**
+     * Rename checkpoint
+     */
+    public async renameCheckpoint(id: string, newName: string): Promise<boolean> {
+        const checkpoint = this.getCheckpoint(id);
+        if (!checkpoint) {
+            return false;
+        }
+        checkpoint.name = newName;
+        await this.saveStorageData();
+        return true;
+    }
+
+    /**
+     * Enforce maximum checkpoint limit
+     */
+    private async enforceCheckpointLimit(): Promise<void> {
+        const maxCheckpoints = this.storageData.settings.maxCheckpoints;
+        if (this.storageData.checkpoints.length <= maxCheckpoints) {
+            return;
+        }
+
+        // Sort by timestamp, keep starred ones
+        const sortedCheckpoints = [...this.storageData.checkpoints]
+            .sort((a, b) => a.timestamp - b.timestamp);
+
+        const toDelete: string[] = [];
+        for (const cp of sortedCheckpoints) {
+            if (this.storageData.checkpoints.length - toDelete.length <= maxCheckpoints) {
+                break;
+            }
+            if (!cp.starred) {
+                toDelete.push(cp.id);
+            }
+        }
+
+        for (const id of toDelete) {
+            await this.deleteCheckpoint(id);
+        }
+    }
+
+    /**
+     * Start a new coding session
+     */
+    public async startSession(name?: string): Promise<CodingSession> {
+        // End current session if exists
+        if (this.storageData.activeSessionId) {
+            await this.endSession();
+        }
+
+        const id = this.generateId();
+        const sessionName = name || `Session ${this.storageData.sessions.length + 1}`;
+        
+        let branchName: string | undefined;
+        if (this.storageData.settings.createSessionBranch && await this.gitManager.isGitRepository()) {
+            branchName = `vibe-session-${id.substring(0, 8)}`;
+            await this.gitManager.createBranch(branchName);
+        }
+
+        const session: CodingSession = {
+            id,
+            name: sessionName,
+            startTime: Date.now(),
+            isActive: true,
+            branchName,
+            checkpointIds: [],
+            totalFilesChanged: 0,
+            aiToolsUsed: []
+        };
+
+        this.storageData.sessions.push(session);
+        this.storageData.activeSessionId = id;
+        await this.saveStorageData();
+
+        // Create session start checkpoint
+        await this.createCheckpoint(
+            CheckpointType.SessionStart,
+            CheckpointSource.User,
+            [],
+            { name: `🎮 Session Started: ${sessionName}` }
+        );
+
+        this._onSessionChanged.fire(session);
+        return session;
+    }
+
+    /**
+     * End current session
+     */
+    public async endSession(): Promise<void> {
+        const session = this.getActiveSession();
+        if (!session) {
+            return;
+        }
+
+        session.endTime = Date.now();
+        session.isActive = false;
+        this.storageData.activeSessionId = undefined;
+        await this.saveStorageData();
+        this._onSessionChanged.fire(undefined);
+    }
+
+    /**
+     * Get active session
+     */
+    public getActiveSession(): CodingSession | undefined {
+        if (!this.storageData.activeSessionId) {
+            return undefined;
+        }
+        return this.storageData.sessions.find(s => s.id === this.storageData.activeSessionId);
+    }
+
+    /**
+     * Get all sessions
+     */
+    public getSessions(): CodingSession[] {
+        return [...this.storageData.sessions].sort((a, b) => b.startTime - a.startTime);
+    }
+
+    /**
+     * Get statistics
+     */
+    public getStatistics(): {
+        totalCheckpoints: number;
+        totalSessions: number;
+        checkpointsBySource: Record<CheckpointSource, number>;
+        checkpointsByType: Record<CheckpointType, number>;
+    } {
+        const checkpointsBySource: Record<CheckpointSource, number> = {
+            [CheckpointSource.User]: 0,
+            [CheckpointSource.Copilot]: 0,
+            [CheckpointSource.Claude]: 0,
+            [CheckpointSource.Cline]: 0,
+            [CheckpointSource.OtherAI]: 0,
+            [CheckpointSource.AutoSave]: 0,
+            [CheckpointSource.FileWatcher]: 0,
+            [CheckpointSource.Unknown]: 0
+        };
+
+        const checkpointsByType: Record<CheckpointType, number> = {
+            [CheckpointType.Auto]: 0,
+            [CheckpointType.Manual]: 0,
+            [CheckpointType.AIGenerated]: 0,
+            [CheckpointType.SessionStart]: 0,
+            [CheckpointType.AutoSave]: 0
+        };
+
+        for (const cp of this.storageData.checkpoints) {
+            checkpointsBySource[cp.source]++;
+            checkpointsByType[cp.type]++;
+        }
+
+        return {
+            totalCheckpoints: this.storageData.checkpoints.length,
+            totalSessions: this.storageData.sessions.length,
+            checkpointsBySource,
+            checkpointsByType
+        };
+    }
+
+    /**
+     * Clear all data (for testing/reset)
+     */
+    public async clearAllData(): Promise<void> {
+        this.storageData = {
+            version: 1,
+            checkpoints: [],
+            sessions: [],
+            activeSessionId: undefined,
+            settings: DEFAULT_SETTINGS
+        };
+        await this.saveStorageData();
+    }
+
+    public dispose(): void {
+        this._onCheckpointCreated.dispose();
+        this._onCheckpointDeleted.dispose();
+        this._onSessionChanged.dispose();
+    }
+}

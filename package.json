@@ -1,0 +1,250 @@
+{
+  "name": "vibe-code-guardian",
+  "displayName": "Vibe Code Guardian",
+  "description": "Game-like checkpoint system for AI-assisted coding - save, load, and rollback your vibe coding sessions",
+  "version": "0.1.1",
+  "publisher": "vibe-coder",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aresnasa/vibe-code-guardian"
+  },
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "keywords": [
+    "checkpoint",
+    "save",
+    "rollback",
+    "AI",
+    "copilot",
+    "claude",
+    "version control"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vibeCodeGuardian",
+          "title": "Vibe Code Guardian",
+          "icon": "$(save-all)"
+        }
+      ]
+    },
+    "views": {
+      "vibeCodeGuardian": [
+        {
+          "id": "vibeCodeGuardian.checkpointExplorer",
+          "name": "Checkpoints",
+          "icon": "$(history)",
+          "contextualTitle": "Vibe Code Guardian"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "vibeCodeGuardian.createCheckpoint",
+        "title": "Create Checkpoint",
+        "icon": "$(save)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.quickSave",
+        "title": "Quick Save",
+        "icon": "$(zap)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.rollback",
+        "title": "Rollback to Checkpoint",
+        "icon": "$(discard)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.viewDiff",
+        "title": "View Changes Since Checkpoint",
+        "icon": "$(diff)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.deleteCheckpoint",
+        "title": "Delete Checkpoint",
+        "icon": "$(trash)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.startSession",
+        "title": "Start New Session",
+        "icon": "$(play)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.endSession",
+        "title": "End Current Session",
+        "icon": "$(debug-stop)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.refresh",
+        "title": "Refresh Checkpoints",
+        "icon": "$(refresh)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.toggleAutoSave",
+        "title": "Toggle Auto-Save",
+        "icon": "$(clock)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showSessions",
+        "title": "Show All Sessions",
+        "icon": "$(list-flat)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.openSettings",
+        "title": "Open Settings",
+        "icon": "$(gear)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showCheckpointDetails",
+        "title": "Show Checkpoint Details",
+        "icon": "$(info)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showFileDiff",
+        "title": "Show File Diff",
+        "icon": "$(diff)",
+        "category": "Vibe Guardian"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "vibeCodeGuardian.createCheckpoint",
+          "when": "view == vibeCodeGuardian.checkpointExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vibeCodeGuardian.quickSave",
+          "when": "view == vibeCodeGuardian.checkpointExplorer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vibeCodeGuardian.refresh",
+          "when": "view == vibeCodeGuardian.checkpointExplorer",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "vibeCodeGuardian.rollback",
+          "when": "view == vibeCodeGuardian.checkpointExplorer && viewItem == checkpoint",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "vibeCodeGuardian.viewDiff",
+          "when": "view == vibeCodeGuardian.checkpointExplorer && viewItem == checkpoint",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "vibeCodeGuardian.deleteCheckpoint",
+          "when": "view == vibeCodeGuardian.checkpointExplorer && viewItem == checkpoint",
+          "group": "2_modify@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "vibeCodeGuardian.quickSave",
+        "key": "ctrl+shift+s",
+        "mac": "cmd+shift+s",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "vibeCodeGuardian.createCheckpoint",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "vibeCodeGuardian.rollback",
+        "key": "ctrl+alt+z",
+        "mac": "cmd+alt+z"
+      }
+    ],
+    "configuration": {
+      "title": "Vibe Code Guardian",
+      "properties": {
+        "vibeCodeGuardian.autoSaveEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic checkpoint creation at regular intervals"
+        },
+        "vibeCodeGuardian.autoSaveIntervalMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Interval in minutes between automatic checkpoints"
+        },
+        "vibeCodeGuardian.autoCheckpointOnAIChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically create checkpoint when AI-generated changes are detected"
+        },
+        "vibeCodeGuardian.maxCheckpointsPerSession": {
+          "type": "number",
+          "default": 50,
+          "minimum": 10,
+          "maximum": 200,
+          "description": "Maximum number of checkpoints to keep per session"
+        },
+        "vibeCodeGuardian.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notification messages for checkpoint operations"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.107.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.27.1",
+    "eslint": "^9.39.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.1"
+  },
+  "dependencies": {
+    "simple-git": "^3.30.0"
+  }
+}
