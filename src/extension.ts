@@ -10,8 +10,35 @@ import { AIDetector } from './aiDetector';
 import { RollbackManager, DiffContentProvider } from './rollbackManager';
 import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
 import { StateMonitor } from './stateMonitor';
-import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage } from './types';
+import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage, NotificationLevel } from './types';
 import { getLanguageDisplayName, getNextLanguage } from './languageConfig';
+
+/**
+ * Determines if a notification should be shown based on notification level and checkpoint type
+ * @param notificationLevel Current notification level setting
+ * @param checkpointType Type of checkpoint being created
+ * @param isUserAction Whether this was triggered by explicit user action
+ * @returns true if notification should be shown
+ */
+function shouldShowNotification(
+    notificationLevel: NotificationLevel,
+    checkpointType: CheckpointType,
+    isUserAction: boolean = false
+): boolean {
+    switch (notificationLevel) {
+        case 'none':
+            return false;
+        case 'all':
+            return true;
+        case 'milestone':
+            // Only show for manual checkpoints, session starts, and explicit user actions
+            return isUserAction || 
+                   checkpointType === CheckpointType.Manual ||
+                   checkpointType === CheckpointType.SessionStart;
+        default:
+            return false;
+    }
+}
 
 let gitManager: GitManager;
 let checkpointManager: CheckpointManager;
