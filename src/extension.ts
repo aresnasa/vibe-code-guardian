@@ -418,6 +418,25 @@ function setupEventListeners(context: vscode.ExtensionContext) {
         }
     });
 
+    // Listen for ALL file changes (including new file creation)
+    aiDetector.onFileChanged(async (event) => {
+        console.log(`📁 File change detected: ${event.changedFiles.length} files, source: ${event.source}, isNew: ${event.isNewFile}`);
+        
+        // Log details for debugging
+        for (const file of event.changedFiles) {
+            console.log(`  - ${file.changeType}: ${file.path}`);
+        }
+        
+        // If it's a new file and we want to track it
+        if (event.isNewFile) {
+            const settings = checkpointManager.getSettings();
+            if (settings.showNotifications) {
+                const fileNames = event.changedFiles.map(f => f.path.split('/').pop()).join(', ');
+                vscode.window.showInformationMessage(`📁 New file detected: ${fileNames}`);
+            }
+        }
+    });
+
     // Listen for checkpoint events
     checkpointManager.onCheckpointCreated(() => treeProvider.refresh());
     checkpointManager.onCheckpointDeleted(() => treeProvider.refresh());
