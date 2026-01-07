@@ -554,6 +554,96 @@ function registerCommands(context: vscode.ExtensionContext) {
             await vscode.commands.executeCommand('vibeCodeGuardian.checkpointExplorer.focus');
         })
     );
+
+    // Cleanup Invalid History
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.cleanupHistory', async () => {
+            const confirm = await vscode.window.showWarningMessage(
+                'This will remove checkpoints with missing git commits or inaccessible files. Continue?',
+                { modal: true },
+                'Yes, Cleanup',
+                'Cancel'
+            );
+
+            if (confirm !== 'Yes, Cleanup') {
+                return;
+            }
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Cleaning up invalid history...',
+                cancellable: false
+            }, async () => {
+                const result = await checkpointManager.cleanupInvalidCheckpoints();
+                
+                if (result.removed > 0) {
+                    vscode.window.showInformationMessage(
+                        `✅ Cleaned up ${result.removed} invalid checkpoint(s).`
+                    );
+                    // Show details in output channel
+                    const outputChannel = vscode.window.createOutputChannel('Vibe Guardian Cleanup');
+                    outputChannel.appendLine('Cleanup Details:');
+                    result.details.forEach(d => outputChannel.appendLine(`  - ${d}`));
+                    outputChannel.show();
+                } else {
+                    vscode.window.showInformationMessage('✅ No invalid checkpoints found.');
+                }
+                
+                treeProvider.refresh();
+            });
+        })
+    );
+
+    // Clear All History (Reset)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.clearAllHistory', async () => {
+            const confirm = await vscode.window.showWarningMessage(
+                '⚠️ This will DELETE ALL checkpoint history. This action cannot be undone!',
+                { modal: true },
+                'Yes, Clear All',
+                'Cancel'
+            );
+
+            if (confirm !== 'Yes, Clear All') {
+                return;
+            }
+
+            // Double confirmation for safety
+            const doubleConfirm = await vscode.window.showWarningMessage(
+                'Are you absolutely sure? All checkpoints and sessions will be permanently deleted.',
+                { modal: true },
+                'DELETE EVERYTHING',
+                'Cancel'
+            );
+
+            if (doubleConfirm !== 'DELETE EVERYTHING') {
+                return;
+            }
+
+            await checkpointManager.clearAllData();
+            vscode.window.showInformationMessage('🗑️ All history cleared. Starting fresh!');
+            treeProvider.refresh();
+        })
+    );
+
+    // Sync Checkpoints with Git
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.syncWithGit', async () => {
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Syncing checkpoints with Git...',
+                cancellable: false
+            }, async () => {
+                const result = await checkpointManager.syncWithGit();
+                
+                vscode.window.showInformationMessage(
+                    `🔄 Sync complete! Found ${result.synced} commits, added ${result.added}, removed ${result.removed}.`
+                );
+                
+                treeProvider.refresh();
+            });
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
