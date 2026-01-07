@@ -105,15 +105,7 @@ export class RollbackManager {
 
         // Show diff for selected file(s)
         for (const file of filesToShow) {
-            // Try native Git diff first if we have a commit hash
-            if (checkpoint.gitCommitHash && await this.gitManager.isGitRepository()) {
-                const shown = await this.showGitDiff(file.path, checkpoint.gitCommitHash, checkpoint.name);
-                if (shown) {
-                    continue;
-                }
-            }
-            
-            // Fallback to content-based diff
+            // Try stored content first (most reliable)
             if (file.previousContent !== undefined && file.currentContent !== undefined) {
                 await this.showContentDiff(
                     file.path,
@@ -122,30 +114,67 @@ export class RollbackManager {
                     `Before: ${checkpoint.name}`,
                     `After: ${checkpoint.name}`
                 );
-            } else if (checkpoint.gitCommitHash) {
+                continue;
+            }
+
+            // Try Git-based diff if we have a commit hash
+            if (checkpoint.gitCommitHash && await this.gitManager.isGitRepository()) {
                 // Try to get content from Git
-                const oldContent = await this.gitManager.getFileAtCommit(
-                    file.path,
-                    `${checkpoint.gitCommitHash}^`
-                );
-                const newContent = await this.gitManager.getFileAtCommit(
+                let oldContent: string | undefined;
+                let newContent: string | undefined;
+
+                // Get new content at checkpoint commit
+                newContent = await this.gitManager.getFileAtCommit(
                     file.path,
                     checkpoint.gitCommitHash
                 );
 
-                if (oldContent !== undefined && newContent !== undefined) {
+                // Try to get old content from parent commit
+                // If parent doesn't exist (first commit), treat as new file
+                oldContent = await this.gitManager.getFileAtCommit(
+                    file.path,
+                    `${checkpoint.gitCommitHash}^`
+                );
+
+                // If we have new content, we can show diff (old might be empty for new files)
+                if (newContent !== undefined) {
                     await this.showContentDiff(
                         file.path,
-                        oldContent,
+                        oldContent ?? '', // Empty string for new files
                         newContent,
                         `Before: ${checkpoint.name}`,
                         `After: ${checkpoint.name}`
                     );
-                } else {
-                    vscode.window.showWarningMessage(`Cannot show diff for ${path.basename(file.path)}: content not available`);
+                    continue;
                 }
+
+                // Maybe file was deleted in checkpoint, try reverse
+                if (oldContent !== undefined) {
+                    // Get current file content
+                    const currentContent = await this.getCurrentFileContent(file.path);
+                    await this.showContentDiff(
+                        file.path,
+                        oldContent,
+                        currentContent ?? '',
+                        `At: ${checkpoint.name}`,
+                        `Current`
+                    );
+                    continue;
+                }
+            }
+
+            // Last resort: show current file vs empty
+            const currentContent = await this.getCurrentFileContent(file.path);
+            if (currentContent !== undefined) {
+                await this.showContentDiff(
+                    file.path,
+                    '',
+                    currentContent,
+                    `Before: ${checkpoint.name}`,
+                    `After: ${checkpoint.name} (current content)`
+                );
             } else {
-                vscode.window.showWarningMessage(`Cannot show diff for ${path.basename(file.path)}: no previous content saved`);
+                vscode.window.showWarningMessage(`Cannot show diff for ${path.basename(file.path)}: file not found`);
             }
         }
     }
