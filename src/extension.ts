@@ -33,10 +33,36 @@ export async function activate(context: vscode.ExtensionContext) {
         rollbackManager = new RollbackManager(gitManager, checkpointManager);
         treeProvider = new TimelineTreeProvider(checkpointManager);
 
+        // Check Git installation first
+        if (!gitManager.isGitInstalled()) {
+            const choice = await vscode.window.showWarningMessage(
+                'Vibe Code Guardian: Git is not installed. Most features require Git.',
+                'Install Git',
+                'Continue Anyway'
+            );
+            if (choice === 'Install Git') {
+                await gitManager.showGitInstallInstructions();
+            }
+        }
+
+        // Detect project type
+        const projectInfo = await gitManager.detectProjectType();
+        console.log(`Detected project: ${projectInfo.name} (${projectInfo.type})`);
+
         // Check Git repository
         const isGitRepo = await gitManager.isGitRepository();
-        if (!isGitRepo) {
-            vscode.window.showWarningMessage('Vibe Code Guardian: Not a Git repository. Some features may be limited.');
+        if (!isGitRepo && gitManager.isGitInstalled()) {
+            const choice = await vscode.window.showWarningMessage(
+                `Vibe Code Guardian: "${projectInfo.name}" is not a Git repository. Initialize one?`,
+                'Initialize Git',
+                'Later'
+            );
+            if (choice === 'Initialize Git') {
+                await gitManager.initializeRepository();
+            }
+        } else if (isGitRepo) {
+            const frameworkInfo = projectInfo.framework ? ` (${projectInfo.framework})` : '';
+            console.log(`✅ Git repository ready: ${projectInfo.name}${frameworkInfo}`);
         }
 
         // Register Tree View for sidebar

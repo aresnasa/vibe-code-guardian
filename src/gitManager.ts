@@ -7,7 +7,490 @@ import * as vscode from 'vscode';
 import { simpleGit, SimpleGit, StatusResult } from 'simple-git';
 import * as path from 'path';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
 import { DiffInfo, DiffHunk } from './types';
+
+/**
+ * Project type detection result
+ */
+export interface ProjectInfo {
+    type: 'nodejs' | 'python' | 'go' | 'rust' | 'java' | 'dotnet' | 'ruby' | 'php' | 'unknown';
+    name: string;
+    hasGit: boolean;
+    hasGitignore: boolean;
+    framework?: string;
+    packageManager?: string;
+}
+
+export class GitManager {
+    private git: SimpleGit | null = null;
+    private workspaceRoot: string | undefined;
+    private _gitInstalled: boolean = false;
+    private _gitVersion: string | undefined;
+
+    constructor() {
+        this.checkGitInstallation();
+        this.initializeGit();
+    }
+
+    /**
+     * Check if Git is installed on the system
+     */
+    public checkGitInstallation(): boolean {
+        try {
+            const version = execSync('git --version', { encoding: 'utf8' });
+            this._gitInstalled = true;
+            this._gitVersion = version.trim().replace('git version ', '');
+            console.log(`Git detected: ${this._gitVersion}`);
+            return true;
+        } catch {
+            this._gitInstalled = false;
+            this._gitVersion = undefined;
+            console.warn('Git is not installed or not in PATH');
+            return false;
+        }
+    }
+
+    /**
+     * Check if Git is installed
+     */
+    public isGitInstalled(): boolean {
+        return this._gitInstalled;
+    }
+
+    /**
+     * Get Git version
+     */
+    public getGitVersion(): string | undefined {
+        return this._gitVersion;
+    }
+
+    /**
+     * Show Git installation instructions based on OS
+     */
+    public async showGitInstallInstructions(): Promise<void> {
+        const platform = process.platform;
+        let instructions = '';
+        let installCommand = '';
+
+        switch (platform) {
+            case 'darwin':
+                instructions = 'Install Git on macOS using Homebrew or Xcode Command Line Tools';
+                installCommand = 'brew install git';
+                break;
+            case 'win32':
+                instructions = 'Download and install Git for Windows from https://git-scm.com/download/win';
+                installCommand = 'winget install Git.Git';
+                break;
+            case 'linux':
+                instructions = 'Install Git using your package manager';
+                installCommand = 'sudo apt install git  # or: sudo yum install git';
+                break;
+            default:
+                instructions = 'Please install Git from https://git-scm.com/';
+        }
+
+        const selection = await vscode.window.showErrorMessage(
+            `Git is not installed. ${instructions}`,
+            'Copy Install Command',
+            'Open Git Website',
+            'Check Again'
+        );
+
+        if (selection === 'Copy Install Command') {
+            await vscode.env.clipboard.writeText(installCommand);
+            vscode.window.showInformationMessage(`Copied to clipboard: ${installCommand}`);
+        } else if (selection === 'Open Git Website') {
+            vscode.env.openExternal(vscode.Uri.parse('https://git-scm.com/downloads'));
+        } else if (selection === 'Check Again') {
+            if (this.checkGitInstallation()) {
+                vscode.window.showInformationMessage(`Git detected: version ${this._gitVersion}`);
+                this.initializeGit();
+            } else {
+                vscode.window.showErrorMessage('Git is still not detected. Please install it and restart VS Code.');
+            }
+        }
+    }
+
+    /**
+     * Detect project type from workspace files
+     */
+    public async detectProjectType(): Promise<ProjectInfo> {
+        const info: ProjectInfo = {
+            type: 'unknown',
+            name: 'Unknown Project',
+            hasGit: false,
+            hasGitignore: false
+        };
+
+        if (!this.workspaceRoot) {
+            return info;
+        }
+
+        // Check if Git repo exists
+        info.hasGit = fs.existsSync(path.join(this.workspaceRoot, '.git'));
+        info.hasGitignore = fs.existsSync(path.join(this.workspaceRoot, '.gitignore'));
+
+        // Detect project type based on config files
+        const files = fs.readdirSync(this.workspaceRoot);
+
+        // Node.js / JavaScript / TypeScript
+        if (files.includes('package.json')) {
+            info.type = 'nodejs';
+            try {
+                const pkg = JSON.parse(fs.readFileSync(
+                    path.join(this.workspaceRoot, 'package.json'), 'utf8'
+                ));
+                info.name = pkg.name || 'Node.js Project';
+                
+                // Detect framework
+                const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+                if (deps['next']) info.framework = 'Next.js';
+                else if (deps['react']) info.framework = 'React';
+                else if (deps['vue']) info.framework = 'Vue';
+                else if (deps['@angular/core']) info.framework = 'Angular';
+                else if (deps['express']) info.framework = 'Express';
+                else if (deps['vscode']) info.framework = 'VS Code Extension';
+
+                // Detect package manager
+                if (files.includes('pnpm-lock.yaml')) info.packageManager = 'pnpm';
+                else if (files.includes('yarn.lock')) info.packageManager = 'yarn';
+                else if (files.includes('package-lock.json')) info.packageManager = 'npm';
+            } catch {
+                info.name = 'Node.js Project';
+            }
+        }
+        // Python
+        else if (files.includes('requirements.txt') || files.includes('setup.py') || 
+                 files.includes('pyproject.toml') || files.includes('Pipfile')) {
+            info.type = 'python';
+            info.name = path.basename(this.workspaceRoot);
+            if (files.includes('pyproject.toml')) info.packageManager = 'poetry';
+            else if (files.includes('Pipfile')) info.packageManager = 'pipenv';
+            else info.packageManager = 'pip';
+        }
+        // Go
+        else if (files.includes('go.mod')) {
+            info.type = 'go';
+            try {
+                const goMod = fs.readFileSync(
+                    path.join(this.workspaceRoot, 'go.mod'), 'utf8'
+                );
+                const match = goMod.match(/module\s+(.+)/);
+                info.name = match ? match[1] : path.basename(this.workspaceRoot);
+            } catch {
+                info.name = path.basename(this.workspaceRoot);
+            }
+        }
+        // Rust
+        else if (files.includes('Cargo.toml')) {
+            info.type = 'rust';
+            info.packageManager = 'cargo';
+            try {
+                const cargo = fs.readFileSync(
+                    path.join(this.workspaceRoot, 'Cargo.toml'), 'utf8'
+                );
+                const match = cargo.match(/name\s*=\s*"([^"]+)"/);
+                info.name = match ? match[1] : path.basename(this.workspaceRoot);
+            } catch {
+                info.name = path.basename(this.workspaceRoot);
+            }
+        }
+        // Java
+        else if (files.includes('pom.xml') || files.includes('build.gradle') || files.includes('build.gradle.kts')) {
+            info.type = 'java';
+            info.packageManager = files.includes('pom.xml') ? 'maven' : 'gradle';
+            info.name = path.basename(this.workspaceRoot);
+        }
+        // .NET
+        else if (files.some(f => f.endsWith('.csproj') || f.endsWith('.sln'))) {
+            info.type = 'dotnet';
+            info.packageManager = 'nuget';
+            info.name = path.basename(this.workspaceRoot);
+        }
+        // Ruby
+        else if (files.includes('Gemfile')) {
+            info.type = 'ruby';
+            info.packageManager = 'bundler';
+            info.name = path.basename(this.workspaceRoot);
+        }
+        // PHP
+        else if (files.includes('composer.json')) {
+            info.type = 'php';
+            info.packageManager = 'composer';
+            info.name = path.basename(this.workspaceRoot);
+        }
+        else {
+            info.name = path.basename(this.workspaceRoot);
+        }
+
+        return info;
+    }
+
+    /**
+     * Initialize Git repository with smart defaults
+     */
+    public async initializeRepository(): Promise<boolean> {
+        if (!this._gitInstalled) {
+            await this.showGitInstallInstructions();
+            return false;
+        }
+
+        if (!this.workspaceRoot) {
+            vscode.window.showErrorMessage('No workspace folder open');
+            return false;
+        }
+
+        // Check if already a Git repo
+        if (fs.existsSync(path.join(this.workspaceRoot, '.git'))) {
+            vscode.window.showInformationMessage('This folder is already a Git repository');
+            return true;
+        }
+
+        const projectInfo = await this.detectProjectType();
+
+        // Ask user for confirmation
+        const result = await vscode.window.showInformationMessage(
+            `Initialize Git repository for ${projectInfo.name}?`,
+            {
+                modal: true,
+                detail: `Project type: ${projectInfo.type}${projectInfo.framework ? ` (${projectInfo.framework})` : ''}\n` +
+                        `This will create a .git folder and optionally a .gitignore file.`
+            },
+            'Initialize',
+            'Initialize with .gitignore',
+            'Cancel'
+        );
+
+        if (result === 'Cancel' || !result) {
+            return false;
+        }
+
+        try {
+            // Initialize git
+            this.git = simpleGit(this.workspaceRoot);
+            await this.git.init();
+
+            // Create .gitignore if requested
+            if (result === 'Initialize with .gitignore') {
+                await this.createGitignore(projectInfo.type);
+            }
+
+            // Create initial commit
+            await this.git.add('.');
+            await this.git.commit('🎮 Initial commit by Vibe Code Guardian');
+
+            vscode.window.showInformationMessage(
+                `✅ Git repository initialized for ${projectInfo.name}!`
+            );
+
+            return true;
+        } catch (error) {
+            console.error('Failed to initialize Git:', error);
+            vscode.window.showErrorMessage(`Failed to initialize Git: ${error}`);
+            return false;
+        }
+    }
+
+    /**
+     * Create .gitignore based on project type
+     */
+    private async createGitignore(projectType: ProjectInfo['type']): Promise<void> {
+        if (!this.workspaceRoot) return;
+
+        const gitignorePath = path.join(this.workspaceRoot, '.gitignore');
+        
+        // Don't overwrite existing
+        if (fs.existsSync(gitignorePath)) {
+            return;
+        }
+
+        let content = '';
+
+        switch (projectType) {
+            case 'nodejs':
+                content = `# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+out/
+build/
+*.js.map
+
+# IDE
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage/
+.nyc_output/
+`;
+                break;
+
+            case 'python':
+                content = `# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+`;
+                break;
+
+            case 'go':
+                content = `# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output
+bin/
+vendor/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+`;
+                break;
+
+            case 'rust':
+                content = `# Generated files
+target/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Cargo.lock in libraries
+# Cargo.lock
+`;
+                break;
+
+            case 'java':
+                content = `# Compiled class files
+*.class
+
+# Build outputs
+target/
+build/
+out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+`;
+                break;
+
+            case 'dotnet':
+                content = `# Build outputs
+bin/
+obj/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
+packages/
+`;
+                break;
+
+            default:
+                content = `# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+`;
+        }
+
+        fs.writeFileSync(gitignorePath, content, 'utf8');
+        console.log(`Created .gitignore for ${projectType} project`);
+    }
 
 export class GitManager {
     private git: SimpleGit | null = null;
