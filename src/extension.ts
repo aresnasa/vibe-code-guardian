@@ -96,6 +96,9 @@ export async function activate(context: vscode.ExtensionContext) {
         // Start auto-save timer
         startAutoSaveTimer(context);
 
+        // Create language status bar item
+        createLanguageStatusBar(context);
+
         // Show welcome and auto-start session
         vscode.window.showInformationMessage('🎮 Vibe Code Guardian activated!');
         await checkpointManager.startSession('Coding Session');
