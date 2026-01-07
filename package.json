@@ -138,6 +138,18 @@
         "title": "Show Project Info",
         "icon": "$(info)",
         "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.timeMachine",
+        "title": "Time Machine - Rollback to Any Point",
+        "icon": "$(history)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.captureState",
+        "title": "Capture Current State",
+        "icon": "$(record)",
+        "category": "Vibe Guardian"
       }
     ],
     "menus": {
