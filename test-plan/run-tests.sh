@@ -153,8 +153,9 @@ test_rollback_checkout() {
     # Perform checkout (time travel)
     git checkout $PARENT_HASH
     
-    # Verify we're at detached HEAD
-    if git status | grep -q "HEAD detached"; then
+    # Verify we're at detached HEAD (check if HEAD is not a branch)
+    HEAD_REF=$(git symbolic-ref HEAD 2>/dev/null || echo "detached")
+    if [ "$HEAD_REF" == "detached" ]; then
         ROLLBACK_CONTENT=$(cat test1.txt)
         if [ "$ROLLBACK_CONTENT" != "$CURRENT_CONTENT" ]; then
             log_success "Test 4: Rollback (checkout) works correctly"
