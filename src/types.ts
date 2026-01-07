@@ -168,6 +168,8 @@ export interface DiffHunk {
 
 export const DEFAULT_SETTINGS: GuardianSettings = {
     autoCheckpointOnAI: true,
+    autoCheckpointOnUserSave: true,
+    minLinesForUserCheckpoint: 5,
     autoSaveInterval: 300, // 5 minutes
     maxCheckpoints: 100,
     enableGit: true,
