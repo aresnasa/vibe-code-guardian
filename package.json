@@ -348,6 +348,17 @@
             "中文 - 使用中文提交消息"
           ],
           "description": "Language for Git commit messages: 'auto' (detect from VS Code), 'en' (English), 'zh' (Chinese)"
+        },
+        "vibeCodeGuardian.pushStrategy": {
+          "type": "string",
+          "enum": ["none", "milestone", "all"],
+          "default": "milestone",
+          "enumDescriptions": [
+            "None - Never push to remote automatically",
+            "Milestone Only - Only push manual checkpoints to remote (recommended)",
+            "All - Push all commits to remote"
+          ],
+          "description": "Control when to push commits to remote: 'none' (never), 'milestone' (manual checkpoints only), 'all' (every commit)"
         }
       }
     }
