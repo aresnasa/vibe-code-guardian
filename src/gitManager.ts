@@ -736,6 +736,87 @@ Thumbs.db
     }
 
     /**
+     * Checkout to a specific commit (detached HEAD) or restore files
+     * This is safer than reset for viewing previous states
+     */
+    public async checkoutCommit(commitHash: string): Promise<boolean> {
+        if (!this.git) {
+            return false;
+        }
+        try {
+            // First stash any uncommitted changes
+            const status = await this.git.status();
+            const hasChanges = status.modified.length > 0 || status.staged.length > 0;
+            
+            if (hasChanges) {
+                await this.git.stash(['push', '-m', 'Vibe Guardian: auto-stash before checkout']);
+            }
+            
+            // Checkout the commit
+            await this.git.checkout(commitHash);
+            return true;
+        } catch (error) {
+            console.error('Failed to checkout:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Restore all files to a specific commit state without changing HEAD
+     * This is the safest rollback method
+     */
+    public async restoreToCommit(commitHash: string): Promise<{ success: boolean; restoredFiles: string[]; errors: string[] }> {
+        if (!this.git) {
+            return { success: false, restoredFiles: [], errors: ['Git not initialized'] };
+        }
+        
+        const restoredFiles: string[] = [];
+        const errors: string[] = [];
+        
+        try {
+            // Get list of files that changed between the commit and current HEAD
+            const diffSummary = await this.git.diffSummary([commitHash, 'HEAD']);
+            
+            for (const file of diffSummary.files) {
+                try {
+                    // Restore each file from the commit
+                    await this.git.checkout([commitHash, '--', file.file]);
+                    restoredFiles.push(file.file);
+                } catch (fileError) {
+                    errors.push(`Failed to restore ${file.file}: ${fileError}`);
+                }
+            }
+            
+            return {
+                success: restoredFiles.length > 0,
+                restoredFiles,
+                errors
+            };
+        } catch (error) {
+            return {
+                success: false,
+                restoredFiles,
+                errors: [`Failed to get diff: ${error}`]
+            };
+        }
+    }
+
+    /**
+     * Get all files in the repository at a specific commit
+     */
+    public async getFilesAtCommit(commitHash: string): Promise<string[]> {
+        if (!this.git) {
+            return [];
+        }
+        try {
+            const result = await this.git.raw(['ls-tree', '-r', '--name-only', commitHash]);
+            return result.trim().split('\n').filter(f => f.length > 0);
+        } catch {
+            return [];
+        }
+    }
+
+    /**
      * Get diff between two commits
      */
     public async getDiff(fromCommit: string, toCommit?: string): Promise<string> {

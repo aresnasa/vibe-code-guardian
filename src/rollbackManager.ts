@@ -336,24 +336,97 @@ export class RollbackManager {
             }
         }
 
-        // Use Git rollback if available
+        // Use Git rollback if we have a commit hash
         if (checkpoint.gitCommitHash && await this.gitManager.isGitRepository()) {
-            try {
-                const success = await this.gitManager.rollbackToCommit(
-                    checkpoint.gitCommitHash,
-                    options?.hard ?? false
+            // If no specific files, restore all files from that commit
+            if (checkpoint.changedFiles.length === 0) {
+                // Ask user for rollback method
+                const method = await vscode.window.showQuickPick(
+                    [
+                        {
+                            label: '$(file-symlink-file) Restore Files',
+                            description: 'Restore file contents to checkpoint state (safest)',
+                            value: 'restore'
+                        },
+                        {
+                            label: '$(git-commit) Soft Reset',
+                            description: 'Move HEAD to checkpoint, keep changes staged',
+                            value: 'soft'
+                        },
+                        {
+                            label: '$(warning) Hard Reset',
+                            description: 'Discard all changes after checkpoint (destructive!)',
+                            value: 'hard'
+                        }
+                    ],
+                    {
+                        placeHolder: 'Choose rollback method',
+                        title: `Rollback to: ${checkpoint.name}`
+                    }
                 );
-                if (success) {
+
+                if (!method) {
                     return {
-                        success: true,
-                        message: `Rolled back to checkpoint: ${checkpoint.name}`,
-                        filesRestored: checkpoint.changedFiles.map(f => f.path),
+                        success: false,
+                        message: 'Rollback cancelled',
+                        filesRestored: [],
                         filesNotRestored: [],
                         errors: []
                     };
                 }
-            } catch (error) {
-                errors.push(`Git rollback failed: ${error}`);
+
+                try {
+                    if (method.value === 'restore') {
+                        const result = await this.gitManager.restoreToCommit(checkpoint.gitCommitHash);
+                        if (result.success) {
+                            return {
+                                success: true,
+                                message: `Restored ${result.restoredFiles.length} files to checkpoint: ${checkpoint.name}`,
+                                filesRestored: result.restoredFiles,
+                                filesNotRestored: [],
+                                errors: result.errors
+                            };
+                        } else {
+                            errors.push(...result.errors);
+                        }
+                    } else {
+                        const hard = method.value === 'hard';
+                        const success = await this.gitManager.rollbackToCommit(
+                            checkpoint.gitCommitHash,
+                            hard
+                        );
+                        if (success) {
+                            return {
+                                success: true,
+                                message: `${hard ? 'Hard' : 'Soft'} reset to checkpoint: ${checkpoint.name}`,
+                                filesRestored: ['All files'],
+                                filesNotRestored: [],
+                                errors: []
+                            };
+                        }
+                    }
+                } catch (error) {
+                    errors.push(`Git rollback failed: ${error}`);
+                }
+            } else {
+                // We have specific files to restore
+                try {
+                    const success = await this.gitManager.rollbackToCommit(
+                        checkpoint.gitCommitHash,
+                        options?.hard ?? false
+                    );
+                    if (success) {
+                        return {
+                            success: true,
+                            message: `Rolled back to checkpoint: ${checkpoint.name}`,
+                            filesRestored: checkpoint.changedFiles.map(f => f.path),
+                            filesNotRestored: [],
+                            errors: []
+                        };
+                    }
+                } catch (error) {
+                    errors.push(`Git rollback failed: ${error}`);
+                }
             }
         }
 
