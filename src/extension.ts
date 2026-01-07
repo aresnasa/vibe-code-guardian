@@ -470,6 +470,79 @@ function registerCommands(context: vscode.ExtensionContext) {
             });
         })
     );
+
+    // Time Machine - Rollback to any point in Git history
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.timeMachine', async () => {
+            try {
+                const commits = await gitManager.getCommitHistory(50);
+                if (commits.length === 0) {
+                    vscode.window.showWarningMessage('No commit history found.');
+                    return;
+                }
+
+                const items = commits.map(commit => ({
+                    label: `$(git-commit) ${commit.hash.substring(0, 7)}`,
+                    description: commit.message.substring(0, 60),
+                    detail: `${new Date(commit.date).toLocaleString()} by ${commit.author}`,
+                    commit: commit
+                }));
+
+                const selected = await vscode.window.showQuickPick(items, {
+                    placeHolder: '🕐 Select a point in time to rollback to',
+                    title: 'Time Machine - Git History',
+                    matchOnDescription: true,
+                    matchOnDetail: true
+                });
+
+                if (!selected) {
+                    return;
+                }
+
+                // Confirm rollback
+                const confirm = await vscode.window.showWarningMessage(
+                    `Rollback to "${selected.commit.message.substring(0, 40)}..."?`,
+                    { modal: true, detail: 'This will discard all changes after this point.' },
+                    'Rollback',
+                    'Cancel'
+                );
+
+                if (confirm !== 'Rollback') {
+                    return;
+                }
+
+                // Perform rollback using StateMonitor
+                const result = await stateMonitor.rollbackToState(selected.commit.hash);
+                
+                if (result.success) {
+                    vscode.window.showInformationMessage(`✅ ${result.message}`);
+                    treeProvider.refresh();
+                } else {
+                    vscode.window.showErrorMessage(`❌ ${result.message}`);
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Time Machine failed: ${error}`);
+            }
+        })
+    );
+
+    // Manual state capture
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.captureState', async () => {
+            const description = await vscode.window.showInputBox({
+                prompt: 'Enter a description for this state (optional)',
+                placeHolder: 'e.g., Before refactoring'
+            });
+
+            const snapshot = await stateMonitor.captureState(description || undefined);
+            if (snapshot) {
+                vscode.window.showInformationMessage(`📌 State captured: ${snapshot.commitHash.substring(0, 7)}`);
+                treeProvider.refresh();
+            } else {
+                vscode.window.showWarningMessage('No changes to capture.');
+            }
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
