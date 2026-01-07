@@ -1105,6 +1105,99 @@ Thumbs.db
         }
     }
 
+    /**
+     * Check if there are uncommitted changes
+     */
+    public async hasUncommittedChanges(): Promise<boolean> {
+        if (!this.git) {
+            return false;
+        }
+        try {
+            const status = await this.git.status();
+            return status.modified.length > 0 || 
+                   status.staged.length > 0 || 
+                   status.not_added.length > 0 ||
+                   status.deleted.length > 0;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Get current branch name
+     */
+    public async getCurrentBranch(): Promise<string | null> {
+        if (!this.git) {
+            return null;
+        }
+        try {
+            const status = await this.git.status();
+            return status.current || null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Checkout a branch
+     */
+    public async checkoutBranch(branchName: string): Promise<boolean> {
+        if (!this.git) {
+            return false;
+        }
+        try {
+            await this.git.checkout(branchName);
+            return true;
+        } catch (error) {
+            console.error('Failed to checkout branch:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Get HEAD info - whether in detached state and current commit
+     */
+    public async getHeadInfo(): Promise<{
+        isDetached: boolean;
+        currentCommit: string;
+        branch?: string;
+    }> {
+        if (!this.git) {
+            return { isDetached: false, currentCommit: '' };
+        }
+        try {
+            const status = await this.git.status();
+            const commit = await this.git.revparse(['HEAD']);
+            
+            // If status.current is null or starts with HEAD, we're detached
+            const isDetached = !status.current || status.current === 'HEAD' || status.detached;
+            
+            return {
+                isDetached: isDetached || false,
+                currentCommit: commit.trim(),
+                branch: isDetached ? undefined : status.current || undefined
+            };
+        } catch {
+            return { isDetached: false, currentCommit: '' };
+        }
+    }
+
+    /**
+     * Create a new branch from current HEAD
+     */
+    public async createBranchFromHere(branchName: string): Promise<boolean> {
+        if (!this.git) {
+            return false;
+        }
+        try {
+            await this.git.checkoutLocalBranch(branchName);
+            return true;
+        } catch (error) {
+            console.error('Failed to create branch:', error);
+            return false;
+        }
+    }
+
     public dispose(): void {
         // Cleanup if needed
     }
