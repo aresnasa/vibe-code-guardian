@@ -472,7 +472,7 @@ export class CheckpointManager {
         if (message.includes('Manual') || message.includes('💾')) {
             return CheckpointType.Manual;
         }
-        return CheckpointType.AIEdit;
+        return CheckpointType.AIGenerated;
     }
 
     /**
@@ -482,8 +482,11 @@ export class CheckpointManager {
         if (message.includes('Copilot') || message.includes('🤖')) {
             return CheckpointSource.Copilot;
         }
-        if (message.includes('Cursor')) {
-            return CheckpointSource.Cursor;
+        if (message.includes('Cline')) {
+            return CheckpointSource.Cline;
+        }
+        if (message.includes('Claude')) {
+            return CheckpointSource.Claude;
         }
         if (message.includes('AutoSave') || message.includes('⏰')) {
             return CheckpointSource.AutoSave;
