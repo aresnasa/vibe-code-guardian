@@ -1124,21 +1124,6 @@ Thumbs.db
     }
 
     /**
-     * Get current branch name
-     */
-    public async getCurrentBranch(): Promise<string | null> {
-        if (!this.git) {
-            return null;
-        }
-        try {
-            const status = await this.git.status();
-            return status.current || null;
-        } catch {
-            return null;
-        }
-    }
-
-    /**
      * Checkout a branch
      */
     public async checkoutBranch(branchName: string): Promise<boolean> {
