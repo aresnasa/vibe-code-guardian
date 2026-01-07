@@ -10,7 +10,8 @@ import { AIDetector } from './aiDetector';
 import { RollbackManager, DiffContentProvider } from './rollbackManager';
 import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
 import { StateMonitor } from './stateMonitor';
-import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType } from './types';
+import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage } from './types';
+import { getLanguageDisplayName, getNextLanguage } from './languageConfig';
 
 let gitManager: GitManager;
 let checkpointManager: CheckpointManager;
