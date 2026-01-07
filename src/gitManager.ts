@@ -1017,6 +1017,59 @@ Thumbs.db
     }
 
     /**
+     * Check if a commit exists
+     */
+    public async commitExists(commitHash: string): Promise<boolean> {
+        if (!this.git) {
+            return false;
+        }
+        try {
+            await this.git.revparse([commitHash]);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Get Vibe Guardian commits from git history
+     */
+    public async getVibeGuardianCommits(maxCount: number = 100): Promise<Array<{
+        hash: string;
+        date: string;
+        message: string;
+    }>> {
+        if (!this.git) {
+            return [];
+        }
+        try {
+            const log = await this.git.log({ maxCount, '--grep': '[Vibe Guardian]' });
+            return log.all.map(commit => ({
+                hash: commit.hash,
+                date: commit.date,
+                message: commit.message
+            }));
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Clean up orphaned Vibe Guardian commits (optional, use with caution)
+     * This removes commits that are no longer needed
+     */
+    public async cleanupOrphanedCommits(): Promise<{
+        success: boolean;
+        message: string;
+    }> {
+        // This is a dangerous operation, just return info for now
+        return {
+            success: true,
+            message: 'Git history cleanup should be done manually with git commands for safety'
+        };
+    }
+
+    /**
      * Stash current changes
      */
     public async stash(message?: string): Promise<boolean> {
