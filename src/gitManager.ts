@@ -716,6 +716,125 @@ Thumbs.db
     }
 
     /**
+     * Get detailed changed files info from Git status
+     * This synchronizes with actual Git state before saving checkpoints
+     */
+    public async getDetailedChangedFiles(): Promise<Array<{
+        path: string;
+        changeType: 'added' | 'modified' | 'deleted' | 'renamed';
+        staged: boolean;
+    }>> {
+        if (!this.git) {
+            return [];
+        }
+        try {
+            const status = await this.git.status();
+            const files: Array<{
+                path: string;
+                changeType: 'added' | 'modified' | 'deleted' | 'renamed';
+                staged: boolean;
+            }> = [];
+
+            // Modified files
+            for (const file of status.modified) {
+                files.push({ path: file, changeType: 'modified', staged: false });
+            }
+
+            // Staged modified files
+            for (const file of status.staged) {
+                if (!files.find(f => f.path === file)) {
+                    files.push({ path: file, changeType: 'modified', staged: true });
+                }
+            }
+
+            // Created/new files
+            for (const file of status.created) {
+                files.push({ path: file, changeType: 'added', staged: true });
+            }
+
+            // Untracked files (not yet added)
+            for (const file of status.not_added) {
+                if (!files.find(f => f.path === file)) {
+                    files.push({ path: file, changeType: 'added', staged: false });
+                }
+            }
+
+            // Deleted files
+            for (const file of status.deleted) {
+                files.push({ path: file, changeType: 'deleted', staged: false });
+            }
+
+            // Renamed files
+            for (const renamed of status.renamed) {
+                files.push({ path: renamed.to, changeType: 'renamed', staged: true });
+            }
+
+            return files;
+        } catch (error) {
+            console.error('Failed to get detailed changed files:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Sync check: verify file exists in Git history or working tree
+     */
+    public async fileExistsInGit(filePath: string, commitHash?: string): Promise<boolean> {
+        if (!this.git) {
+            return false;
+        }
+        try {
+            if (commitHash) {
+                // Check if file exists at specific commit
+                await this.git.show([`${commitHash}:${filePath}`]);
+                return true;
+            } else {
+                // Check if file is tracked
+                const result = await this.git.raw(['ls-files', filePath]);
+                return result.trim().length > 0;
+            }
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Stage all changes and create commit - returns actual changed files
+     */
+    public async stageAndCommitAll(message: string): Promise<{
+        success: boolean;
+        commitHash?: string;
+        changedFiles: string[];
+    }> {
+        if (!this.git) {
+            return { success: false, changedFiles: [] };
+        }
+        try {
+            // Get changed files BEFORE staging
+            const changedFiles = await this.getChangedFiles();
+            
+            if (changedFiles.length === 0) {
+                return { success: false, changedFiles: [] };
+            }
+
+            // Stage all
+            await this.git.add('.');
+            
+            // Commit
+            const result = await this.git.commit(message);
+            
+            return {
+                success: true,
+                commitHash: result.commit,
+                changedFiles
+            };
+        } catch (error) {
+            console.error('Failed to stage and commit:', error);
+            return { success: false, changedFiles: [] };
+        }
+    }
+
+    /**
      * Rollback to a specific commit
      */
     public async rollbackToCommit(commitHash: string, hard: boolean = false): Promise<boolean> {
