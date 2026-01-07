@@ -86,6 +86,9 @@ export enum FileChangeType {
     Renamed = 'renamed'
 }
 
+/** Commit message language */
+export type CommitLanguage = 'en' | 'zh' | 'auto';
+
 export interface CodingSession {
     /** Unique session identifier */
     id: string;
