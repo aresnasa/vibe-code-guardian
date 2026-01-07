@@ -13,6 +13,7 @@ import {
     CheckpointStorageData,
     GuardianSettings,
     ChangedFile,
+    FileChangeType,
     DEFAULT_SETTINGS
 } from './types';
 import { GitManager } from './gitManager';
