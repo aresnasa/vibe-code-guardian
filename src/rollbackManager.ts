@@ -379,6 +379,8 @@ export class RollbackManager {
                     if (method.value === 'restore') {
                         const result = await this.gitManager.restoreToCommit(checkpoint.gitCommitHash);
                         if (result.success) {
+                            // Refresh files in VS Code editor
+                            await this.refreshFilesInEditor(result.restoredFiles);
                             return {
                                 success: true,
                                 message: `Restored ${result.restoredFiles.length} files to checkpoint: ${checkpoint.name}`,
@@ -396,6 +398,8 @@ export class RollbackManager {
                             hard
                         );
                         if (success) {
+                            // Refresh all open files after reset
+                            await this.refreshAllOpenFiles();
                             return {
                                 success: true,
                                 message: `${hard ? 'Hard' : 'Soft'} reset to checkpoint: ${checkpoint.name}`,
@@ -416,6 +420,8 @@ export class RollbackManager {
                         options?.hard ?? false
                     );
                     if (success) {
+                        // Refresh the specific files that were restored
+                        await this.refreshFilesInEditor(checkpoint.changedFiles.map(f => f.path));
                         return {
                             success: true,
                             message: `Rolled back to checkpoint: ${checkpoint.name}`,
@@ -532,6 +538,65 @@ export class RollbackManager {
             // Write directly to file
             fs.writeFileSync(filePath, content, 'utf8');
         }
+    }
+
+    /**
+     * Refresh files in VS Code editor after Git operations
+     * This ensures the editor shows the updated content from disk
+     */
+    private async refreshFilesInEditor(filePaths: string[]): Promise<void> {
+        // Collect all open documents that need refresh
+        const docsToRefresh: vscode.TextDocument[] = [];
+        
+        for (const filePath of filePaths) {
+            const doc = vscode.workspace.textDocuments.find(
+                d => d.uri.fsPath === filePath || d.uri.fsPath.endsWith(filePath)
+            );
+            if (doc) {
+                docsToRefresh.push(doc);
+            }
+        }
+
+        // If specific files provided, refresh them
+        if (docsToRefresh.length > 0) {
+            for (const doc of docsToRefresh) {
+                try {
+                    // Revert the document to reload from disk
+                    await vscode.commands.executeCommand('workbench.action.files.revert', doc.uri);
+                } catch {
+                    // If revert fails, try to close and reopen
+                    try {
+                        const uri = doc.uri;
+                        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+                        await vscode.window.showTextDocument(uri);
+                    } catch (e) {
+                        console.warn(`Failed to refresh ${doc.uri.fsPath}:`, e);
+                    }
+                }
+            }
+        }
+
+        // Also refresh any visible editors
+        for (const editor of vscode.window.visibleTextEditors) {
+            if (editor.document.uri.scheme === 'file') {
+                try {
+                    await vscode.commands.executeCommand('workbench.action.files.revert', editor.document.uri);
+                } catch {
+                    // Ignore errors for visible editors
+                }
+            }
+        }
+
+        // Trigger a workspace refresh
+        await vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
+    }
+
+    /**
+     * Refresh all open files in editor
+     */
+    private async refreshAllOpenFiles(): Promise<void> {
+        const allDocs = vscode.workspace.textDocuments.filter(d => d.uri.scheme === 'file');
+        await this.refreshFilesInEditor(allDocs.map(d => d.uri.fsPath));
     }
 
     /**
