@@ -208,7 +208,8 @@ function registerCommands(context: vscode.ExtensionContext) {
 
             if (confirm === 'Rollback' && checkpointId) {
                 try {
-                    const result = await rollbackManager.rollback(checkpointId);
+                    // Skip confirmation in rollbackManager since we already confirmed here
+                    const result = await rollbackManager.rollback(checkpointId, { skipConfirmation: true });
                     if (result.success) {
                         vscode.window.showInformationMessage(`✅ Rolled back! ${result.filesRestored.length} files restored.`);
                         treeProvider.refresh();
