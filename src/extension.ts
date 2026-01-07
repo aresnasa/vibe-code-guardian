@@ -1083,6 +1083,31 @@ function updateNotificationStatusBar(level: NotificationLevel) {
     }
 }
 
+/**
+ * Creates the push strategy status bar item
+ */
+function createPushStrategyStatusBar(context: vscode.ExtensionContext) {
+    pushStrategyStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
+    pushStrategyStatusBarItem.command = 'vibeCodeGuardian.togglePushStrategy';
+    pushStrategyStatusBarItem.tooltip = 'Click to toggle push strategy (Milestone Only/All/None)';
+    
+    // Initialize with current setting
+    const settings = checkpointManager.getSettings();
+    updatePushStrategyStatusBar(settings.pushStrategy);
+    
+    pushStrategyStatusBarItem.show();
+    context.subscriptions.push(pushStrategyStatusBarItem);
+}
+
+/**
+ * Updates the push strategy status bar item text
+ */
+function updatePushStrategyStatusBar(strategy: PushStrategy) {
+    if (pushStrategyStatusBarItem) {
+        pushStrategyStatusBarItem.text = getPushStrategyDisplayName(strategy);
+    }
+}
+
 export function deactivate() {
     if (autoSaveInterval) {
         clearInterval(autoSaveInterval);
