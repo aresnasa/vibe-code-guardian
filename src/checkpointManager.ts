@@ -14,9 +14,11 @@ import {
     GuardianSettings,
     ChangedFile,
     FileChangeType,
-    DEFAULT_SETTINGS
+    DEFAULT_SETTINGS,
+    CommitLanguage
 } from './types';
 import { GitManager } from './gitManager';
+import { generateLocalizedCheckpointName } from './languageConfig';
 
 export class CheckpointManager {
     private context: vscode.ExtensionContext;
