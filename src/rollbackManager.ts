@@ -417,8 +417,9 @@ export class RollbackManager {
             }
         }
 
-        // Fallback to file content restoration (only if we have changedFiles)
-        if (checkpoint.changedFiles.length > 0) {
+        // Fallback to file content restoration (only if we have changedFiles and Git failed)
+        if (checkpoint.changedFiles.length > 0 && errors.length > 0) {
+            console.log('Attempting fallback file content restoration...');
             for (const file of checkpoint.changedFiles) {
                 try {
                     if (file.previousContent !== undefined) {
@@ -434,51 +435,33 @@ export class RollbackManager {
                             filesRestored.push(file.path);
                         } else {
                             filesNotRestored.push(file.path);
-                            errors.push(`Could not get content for: ${file.path}`);
                         }
                     } else {
                         filesNotRestored.push(file.path);
-                        errors.push(`No previous content for: ${file.path}`);
                     }
                 } catch (error) {
                     filesNotRestored.push(file.path);
-                    errors.push(`Failed to restore ${file.path}: ${error}`);
-                }
-            }
-        } else if (checkpoint.gitCommitHash) {
-            // No changedFiles but have git commit - this shouldn't happen if Git rollback worked
-            // Show error with more details
-            errors.push('No files to restore. The checkpoint may have been created before any changes were made.');
-            
-            // Offer to do a hard reset as last resort
-            const hardReset = await vscode.window.showWarningMessage(
-                'No specific files to restore. Would you like to do a hard reset to this checkpoint instead?',
-                { modal: true },
-                'Hard Reset',
-                'Cancel'
-            );
-            
-            if (hardReset === 'Hard Reset') {
-                const success = await this.gitManager.rollbackToCommit(checkpoint.gitCommitHash, true);
-                if (success) {
-                    await this.refreshAllOpenFiles();
-                    return {
-                        success: true,
-                        message: `Hard reset to checkpoint: ${checkpoint.name}`,
-                        filesRestored: ['All files (hard reset)'],
-                        filesNotRestored: [],
-                        errors: []
-                    };
+                    console.error(`Failed to restore ${file.path}:`, error);
                 }
             }
         }
 
-        const success = filesRestored.length > 0 && errors.length === 0;
+        // If we got here with errors and no restored files, the rollback failed
+        if (errors.length > 0 && filesRestored.length === 0) {
+            // Show detailed error
+            const errorDetail = errors.join('\n');
+            vscode.window.showErrorMessage(
+                `Rollback failed. Errors:\n${errorDetail}`,
+                { modal: true }
+            );
+        }
+
+        const success = filesRestored.length > 0 || errors.length === 0;
         return {
             success,
             message: success 
                 ? `Rolled back to checkpoint: ${checkpoint.name}` 
-                : `Partial rollback to: ${checkpoint.name}`,
+                : `Rollback failed: ${errors.join(', ')}`,
             filesRestored,
             filesNotRestored,
             errors
