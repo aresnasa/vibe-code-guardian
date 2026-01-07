@@ -10,8 +10,8 @@ import { AIDetector } from './aiDetector';
 import { RollbackManager, DiffContentProvider } from './rollbackManager';
 import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
 import { StateMonitor } from './stateMonitor';
-import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage, NotificationLevel } from './types';
-import { getLanguageDisplayName, getNextLanguage, getNotificationLevelDisplayName, getNextNotificationLevel } from './languageConfig';
+import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage, NotificationLevel, PushStrategy } from './types';
+import { getLanguageDisplayName, getNextLanguage, getNotificationLevelDisplayName, getNextNotificationLevel, getPushStrategyDisplayName, getNextPushStrategy } from './languageConfig';
 
 /**
  * Determines if a notification should be shown based on notification level and checkpoint type
