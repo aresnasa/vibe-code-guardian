@@ -181,14 +181,22 @@ function registerCommands(context: vscode.ExtensionContext) {
             } else {
                 const checkpoints = checkpointManager.getCheckpoints();
                 if (checkpoints.length === 0) {
-                    vscode.window.showWarningMessage('No checkpoints available.');
+                    // Offer to use Time Machine instead
+                    const action = await vscode.window.showWarningMessage(
+                        'No checkpoints available. Use Time Machine to rollback from Git history?',
+                        'Open Time Machine',
+                        'Cancel'
+                    );
+                    if (action === 'Open Time Machine') {
+                        await vscode.commands.executeCommand('vibeCodeGuardian.timeMachine');
+                    }
                     return;
                 }
 
                 const selected = await vscode.window.showQuickPick(
                     checkpoints.map(cp => ({
                         label: cp.name,
-                        description: cp.description || '',
+                        description: cp.gitCommitHash ? `🔗 ${cp.gitCommitHash.substring(0, 7)}` : '⚠️ No Git',
                         detail: `📅 ${new Date(cp.timestamp).toLocaleString()} | 📁 ${cp.changedFiles.length} files`,
                         checkpoint: cp
                     })),
@@ -197,6 +205,20 @@ function registerCommands(context: vscode.ExtensionContext) {
 
                 if (!selected) { return; }
                 checkpointId = selected.checkpoint.id;
+            }
+
+            // Verify checkpoint exists
+            const checkpoint = checkpointManager.getCheckpoint(checkpointId);
+            if (!checkpoint) {
+                const action = await vscode.window.showErrorMessage(
+                    'Checkpoint not found. It may have been cleaned up. Use Time Machine instead?',
+                    'Open Time Machine',
+                    'Cancel'
+                );
+                if (action === 'Open Time Machine') {
+                    await vscode.commands.executeCommand('vibeCodeGuardian.timeMachine');
+                }
+                return;
             }
 
             const confirm = await vscode.window.showWarningMessage(
