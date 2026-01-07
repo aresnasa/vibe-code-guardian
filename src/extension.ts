@@ -972,6 +972,31 @@ function startAutoSaveTimer(context: vscode.ExtensionContext) {
     }
 }
 
+/**
+ * Creates the language status bar item
+ */
+function createLanguageStatusBar(context: vscode.ExtensionContext) {
+    languageStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    languageStatusBarItem.command = 'vibeCodeGuardian.toggleCommitLanguage';
+    languageStatusBarItem.tooltip = 'Click to toggle commit message language (EN/中文/Auto)';
+    
+    // Initialize with current setting
+    const settings = checkpointManager.getSettings();
+    updateLanguageStatusBar(settings.commitLanguage);
+    
+    languageStatusBarItem.show();
+    context.subscriptions.push(languageStatusBarItem);
+}
+
+/**
+ * Updates the language status bar item text
+ */
+function updateLanguageStatusBar(language: CommitLanguage) {
+    if (languageStatusBarItem) {
+        languageStatusBarItem.text = `$(globe) ${getLanguageDisplayName(language)}`;
+    }
+}
+
 export function deactivate() {
     if (autoSaveInterval) {
         clearInterval(autoSaveInterval);
