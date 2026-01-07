@@ -290,6 +290,52 @@ class RollbackTester {
     }
 
     /**
+     * Test 9: Simulate extension rollback flow (create commit, then rollback)
+     */
+    async testSimulateExtensionFlow(): Promise<void> {
+        const testName = 'Simulate Extension Rollback Flow';
+        try {
+            // Save current state
+            const originalHead = await this.git.revparse(['HEAD']);
+            const testFilePath = path.join(TEST_DIR, '123.md');
+            const originalContent = fs.readFileSync(testFilePath, 'utf-8');
+            
+            // Step 1: Make a change and commit (like extension does)
+            const newContent = originalContent + '\n# Extension Test Change';
+            fs.writeFileSync(testFilePath, newContent);
+            await this.git.add(['123.md']);
+            await this.git.commit('[Vibe Guardian] Test Checkpoint');
+            const checkpointCommit = await this.git.revparse(['HEAD']);
+            await this.log(`Created checkpoint commit: ${checkpointCommit.substring(0, 7)}`);
+            
+            // Step 2: Make another change
+            fs.writeFileSync(testFilePath, newContent + '\n# After checkpoint change');
+            await this.git.add(['123.md']);
+            await this.git.commit('[Vibe Guardian] After checkpoint');
+            
+            // Step 3: Rollback to checkpoint (like extension does with hard reset)
+            await this.log(`Rolling back to checkpoint: ${checkpointCommit.substring(0, 7)}`);
+            await this.git.reset(['--hard', checkpointCommit]);
+            
+            // Verify rollback
+            const currentContent = fs.readFileSync(testFilePath, 'utf-8');
+            if (currentContent.includes('# Extension Test Change') && 
+                !currentContent.includes('# After checkpoint change')) {
+                await this.log('Rollback successful - content matches checkpoint');
+                await this.pass(testName);
+            } else {
+                await this.fail(testName, 'Content does not match checkpoint state');
+            }
+            
+            // Restore original state
+            await this.git.reset(['--hard', originalHead]);
+            fs.writeFileSync(testFilePath, originalContent);
+        } catch (error) {
+            await this.fail(testName, String(error));
+        }
+    }
+
+    /**
      * Run all tests
      */
     async runAllTests(): Promise<void> {
@@ -305,6 +351,8 @@ class RollbackTester {
         await this.testDiffBetweenCommits();
         await this.testFileCheckout();
         await this.testHardResetRollback();
+        await this.testRollbackPreservesOtherFiles();
+        await this.testMultipleRollbacks();
 
         // Print summary
         console.log('');
