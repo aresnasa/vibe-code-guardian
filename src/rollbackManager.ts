@@ -178,26 +178,21 @@ export class RollbackManager {
                 return false;
             }
 
-            // Use vscode.git's diff command
-            const relativePath = path.relative(repo.rootUri.fsPath, filePath);
-            
-            // Create Git URI for the old version (parent commit)
-            const oldUri = vscode.Uri.parse(`git:${relativePath}?${JSON.stringify({
-                path: relativePath,
-                ref: `${commitHash}^`
-            })}`);
-            
-            // Create Git URI for the new version (at commit)
-            const newUri = vscode.Uri.parse(`git:${relativePath}?${JSON.stringify({
-                path: relativePath,
-                ref: commitHash
-            })}`);
+            // Get file content at both commits using our GitManager
+            const oldContent = await this.gitManager.getFileAtCommit(filePath, `${commitHash}^`);
+            const newContent = await this.gitManager.getFileAtCommit(filePath, commitHash);
 
-            await vscode.commands.executeCommand(
-                'vscode.diff',
-                oldUri,
-                newUri,
-                `${path.basename(filePath)}: Before ↔ After (${checkpointName})`
+            if (oldContent === undefined || newContent === undefined) {
+                return false;
+            }
+
+            // Use our own diff provider instead of git: URI scheme
+            await this.showContentDiff(
+                filePath,
+                oldContent,
+                newContent,
+                `Before: ${checkpointName}`,
+                `After: ${checkpointName}`
             );
 
             return true;
