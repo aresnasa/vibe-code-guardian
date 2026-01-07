@@ -150,6 +150,12 @@
         "title": "Capture Current State",
         "icon": "$(record)",
         "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showTimeline",
+        "title": "Show Timeline / Checkpoints",
+        "icon": "$(list-tree)",
+        "category": "Vibe Guardian"
       }
     ],
     "menus": {
