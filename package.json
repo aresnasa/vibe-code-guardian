@@ -319,7 +319,18 @@
         "vibeCodeGuardian.showNotifications": {
           "type": "boolean",
           "default": true,
-          "description": "Show notification messages for checkpoint operations"
+          "description": "(Deprecated) Show notification messages for checkpoint operations. Use notificationLevel instead."
+        },
+        "vibeCodeGuardian.notificationLevel": {
+          "type": "string",
+          "enum": ["all", "milestone", "none"],
+          "default": "milestone",
+          "enumDescriptions": [
+            "All - Show notifications for all checkpoints",
+            "Milestone Only - Only show for manual saves and session events (recommended)",
+            "None - Silent mode, no notifications"
+          ],
+          "description": "Control when to show notification messages: 'all' (every checkpoint), 'milestone' (manual/session only), 'none' (silent)"
         },
         "vibeCodeGuardian.commitLanguage": {
           "type": "string",
