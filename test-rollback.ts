@@ -167,26 +167,27 @@ class RollbackTester {
         try {
             const testFilePath = path.join(TEST_DIR, '123.md');
             
-            // Get original content
-            const originalContent = fs.readFileSync(testFilePath, 'utf-8');
-            await this.log(`Original content: "${originalContent.trim()}"`);
+            // Get original content from Git HEAD (not from file system)
+            const gitContent = await this.git.show(['HEAD:123.md']);
+            await this.log(`Git HEAD content: "${gitContent.trim()}"`);
 
             // Modify the file
-            const modifiedContent = originalContent + '\n# Modified by test';
+            const modifiedContent = gitContent + '\n# Modified by test';
             fs.writeFileSync(testFilePath, modifiedContent);
             await this.log(`Modified content: "${fs.readFileSync(testFilePath, 'utf-8').trim()}"`);
 
             // Restore using git checkout
             await this.git.checkout(['HEAD', '--', '123.md']);
             
-            // Verify restoration
+            // Verify restoration - compare trimmed content
             const restoredContent = fs.readFileSync(testFilePath, 'utf-8');
             await this.log(`Restored content: "${restoredContent.trim()}"`);
 
-            if (restoredContent === originalContent) {
+            // Compare trimmed content (ignore trailing newline differences)
+            if (restoredContent.trim() === gitContent.trim()) {
                 await this.pass(testName);
             } else {
-                await this.fail(testName, 'Content not restored correctly');
+                await this.fail(testName, `Content not restored correctly. Expected: "${gitContent.trim()}", Got: "${restoredContent.trim()}"`);
             }
         } catch (error) {
             await this.fail(testName, String(error));
