@@ -73,34 +73,7 @@ export class CheckpointManager {
      * Generate checkpoint name based on pattern
      */
     private generateCheckpointName(type: CheckpointType, source: CheckpointSource): string {
-        const now = new Date();
-        const timestamp = now.toLocaleString('zh-CN', {
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        }).replace(/\//g, '-');
-
-        const typeEmoji: Record<CheckpointType, string> = {
-            [CheckpointType.Auto]: '🔄',
-            [CheckpointType.Manual]: '💾',
-            [CheckpointType.AIGenerated]: '🤖',
-            [CheckpointType.SessionStart]: '🎮',
-            [CheckpointType.AutoSave]: '⏰'
-        };
-
-        const sourceLabel: Record<CheckpointSource, string> = {
-            [CheckpointSource.User]: 'Manual',
-            [CheckpointSource.Copilot]: 'Copilot',
-            [CheckpointSource.Claude]: 'Claude',
-            [CheckpointSource.Cline]: 'Cline',
-            [CheckpointSource.OtherAI]: 'AI',
-            [CheckpointSource.AutoSave]: 'AutoSave',
-            [CheckpointSource.FileWatcher]: 'Watcher',
-            [CheckpointSource.Unknown]: 'Unknown'
-        };
-
-        return `${typeEmoji[type]} ${sourceLabel[source]} @ ${timestamp}`;
+        return generateLocalizedCheckpointName(type, source, this.storageData.settings.commitLanguage);
     }
 
     /**
