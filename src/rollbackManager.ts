@@ -287,10 +287,24 @@ export class RollbackManager {
         if (!checkpoint) {
             return {
                 success: false,
-                message: 'Checkpoint not found',
+                message: 'Checkpoint not found. Use Time Machine to rollback from Git history.',
                 filesRestored: [],
                 filesNotRestored: [],
                 errors: ['Checkpoint not found']
+            };
+        }
+
+        // Check if we can rollback - need either gitCommitHash or stored content
+        const hasGitCommit = !!checkpoint.gitCommitHash;
+        const hasStoredContent = checkpoint.changedFiles.some(f => f.previousContent !== undefined);
+        
+        if (!hasGitCommit && !hasStoredContent) {
+            return {
+                success: false,
+                message: 'Cannot rollback: checkpoint has no Git commit hash and no stored content. Use Time Machine instead.',
+                filesRestored: [],
+                filesNotRestored: [],
+                errors: ['No rollback data available']
             };
         }
 
