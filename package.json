@@ -208,6 +208,12 @@
         "title": "Show Current Position in History",
         "icon": "$(location)",
         "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.toggleCommitLanguage",
+        "title": "Toggle Commit Language (EN/中文/Auto)",
+        "icon": "$(globe)",
+        "category": "Vibe Guardian"
       }
     ],
     "menus": {
@@ -308,6 +314,17 @@
           "type": "boolean",
           "default": true,
           "description": "Show notification messages for checkpoint operations"
+        },
+        "vibeCodeGuardian.commitLanguage": {
+          "type": "string",
+          "enum": ["auto", "en", "zh"],
+          "default": "auto",
+          "enumDescriptions": [
+            "Auto-detect from VS Code language (如果是中文则使用中文)",
+            "English - Use English for commit messages",
+            "中文 - 使用中文提交消息"
+          ],
+          "description": "Language for Git commit messages: 'auto' (detect from VS Code), 'en' (English), 'zh' (Chinese)"
         }
       }
     }
