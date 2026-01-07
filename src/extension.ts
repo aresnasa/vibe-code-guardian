@@ -9,6 +9,7 @@ import { CheckpointManager } from './checkpointManager';
 import { AIDetector } from './aiDetector';
 import { RollbackManager, DiffContentProvider } from './rollbackManager';
 import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
+import { StateMonitor } from './stateMonitor';
 import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType } from './types';
 
 let gitManager: GitManager;
@@ -16,6 +17,7 @@ let checkpointManager: CheckpointManager;
 let aiDetector: AIDetector;
 let rollbackManager: RollbackManager;
 let treeProvider: TimelineTreeProvider;
+let stateMonitor: StateMonitor;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('🎮 Vibe Code Guardian is activating...');
