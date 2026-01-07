@@ -170,6 +170,12 @@
         "category": "Vibe Guardian"
       },
       {
+        "command": "vibeCodeGuardian.debugShowCheckpoints",
+        "title": "Debug: Show Checkpoint Details",
+        "icon": "$(debug)",
+        "category": "Vibe Guardian"
+      },
+      {
         "command": "vibeCodeGuardian.syncWithGit",
         "title": "Sync Checkpoints with Git",
         "icon": "$(sync)",
