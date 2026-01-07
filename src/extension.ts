@@ -626,6 +626,46 @@ function registerCommands(context: vscode.ExtensionContext) {
         })
     );
 
+    // Debug: Show Checkpoint Details
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.debugShowCheckpoints', async () => {
+            const checkpoints = checkpointManager.getCheckpoints();
+            
+            if (checkpoints.length === 0) {
+                vscode.window.showInformationMessage('No checkpoints found.');
+                return;
+            }
+
+            const output = vscode.window.createOutputChannel('Vibe Guardian Debug');
+            output.clear();
+            output.appendLine('=== Checkpoint Debug Info ===\n');
+            output.appendLine(`Total checkpoints: ${checkpoints.length}\n`);
+            
+            for (const cp of checkpoints) {
+                output.appendLine(`--- ${cp.name} ---`);
+                output.appendLine(`  ID: ${cp.id}`);
+                output.appendLine(`  Timestamp: ${new Date(cp.timestamp).toLocaleString()}`);
+                output.appendLine(`  Git Commit: ${cp.gitCommitHash || 'NONE'}`);
+                output.appendLine(`  Type: ${cp.type}`);
+                output.appendLine(`  Source: ${cp.source}`);
+                output.appendLine(`  Changed Files: ${cp.changedFiles.length}`);
+                for (const f of cp.changedFiles) {
+                    output.appendLine(`    - ${f.path} (${f.changeType})`);
+                }
+                output.appendLine('');
+            }
+
+            // Also show Git history for comparison
+            output.appendLine('\n=== Git Commit History (last 10) ===\n');
+            const commits = await gitManager.getCommitHistory(10);
+            for (const commit of commits) {
+                output.appendLine(`${commit.hash.substring(0, 7)} - ${commit.message}`);
+            }
+
+            output.show();
+        })
+    );
+
     // Sync Checkpoints with Git
     context.subscriptions.push(
         vscode.commands.registerCommand('vibeCodeGuardian.syncWithGit', async () => {
