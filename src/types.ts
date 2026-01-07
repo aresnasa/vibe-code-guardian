@@ -123,6 +123,10 @@ export interface CheckpointStorageData {
 export interface GuardianSettings {
     /** Enable auto-checkpoint on AI edits */
     autoCheckpointOnAI: boolean;
+    /** Enable auto-checkpoint on user edits (file save) */
+    autoCheckpointOnUserSave: boolean;
+    /** Minimum lines changed to trigger user checkpoint */
+    minLinesForUserCheckpoint: number;
     /** Auto-save interval in seconds (0 = disabled) */
     autoSaveInterval: number;
     /** Maximum checkpoints to keep */
