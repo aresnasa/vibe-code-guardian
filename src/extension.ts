@@ -425,7 +425,7 @@ function setupEventListeners(context: vscode.ExtensionContext) {
         }
     });
 
-    // Listen for ALL file changes (including new file creation)
+    // Listen for ALL file changes (including user edits and new file creation)
     aiDetector.onFileChanged(async (event) => {
         console.log(`📁 File change detected: ${event.changedFiles.length} files, source: ${event.source}, isNew: ${event.isNewFile}`);
         
@@ -434,13 +434,40 @@ function setupEventListeners(context: vscode.ExtensionContext) {
             console.log(`  - ${file.changeType}: ${file.path}`);
         }
         
-        // If it's a new file and we want to track it
-        if (event.isNewFile) {
-            const settings = checkpointManager.getSettings();
-            if (settings.showNotifications) {
+        const settings = checkpointManager.getSettings();
+        
+        // Handle user edits - create checkpoint if enabled
+        if (event.source === CheckpointSource.User && settings.autoCheckpointOnUserSave) {
+            // Calculate total lines changed
+            const totalLinesChanged = event.changedFiles.reduce((sum, file) => {
+                return sum + (file.linesAdded || 0) + (file.linesRemoved || 0);
+            }, 0);
+            
+            // Only create checkpoint if significant changes or new file
+            if (event.isNewFile || totalLinesChanged >= settings.minLinesForUserCheckpoint) {
                 const fileNames = event.changedFiles.map(f => f.path.split('/').pop()).join(', ');
-                vscode.window.showInformationMessage(`📁 New file detected: ${fileNames}`);
+                const description = event.isNewFile 
+                    ? `New file: ${fileNames}`
+                    : `User edit: ${fileNames} (+${totalLinesChanged} lines)`;
+                
+                const checkpoint = await checkpointManager.createCheckpoint(
+                    event.isNewFile ? CheckpointType.Auto : CheckpointType.Manual,
+                    CheckpointSource.User,
+                    event.changedFiles,
+                    { description }
+                );
+                
+                if (checkpoint && settings.showNotifications) {
+                    vscode.window.showInformationMessage(`💾 User checkpoint: ${checkpoint.name}`);
+                }
+                treeProvider.refresh();
             }
+        }
+        
+        // Notify for new files
+        if (event.isNewFile && settings.showNotifications) {
+            const fileNames = event.changedFiles.map(f => f.path.split('/').pop()).join(', ');
+            console.log(`📁 New file created: ${fileNames}`);
         }
     });
 
