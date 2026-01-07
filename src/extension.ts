@@ -543,6 +543,16 @@ function registerCommands(context: vscode.ExtensionContext) {
             }
         })
     );
+
+    // Show Timeline / Focus on checkpoint explorer view
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showTimeline', async () => {
+            // Focus on the Vibe Code Guardian view container in the activity bar
+            await vscode.commands.executeCommand('workbench.view.extension.vibeCodeGuardian');
+            // Optionally also reveal the checkpoint explorer
+            await vscode.commands.executeCommand('vibeCodeGuardian.checkpointExplorer.focus');
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
