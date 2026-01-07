@@ -201,7 +201,19 @@
         "vibeCodeGuardian.autoCheckpointOnAIChanges": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically create checkpoint when AI-generated changes are detected"
+          "description": "Automatically create checkpoint when AI-generated changes are detected (Copilot, Claude, etc.)"
+        },
+        "vibeCodeGuardian.autoCheckpointOnUserSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically create checkpoint when user saves files with significant changes"
+        },
+        "vibeCodeGuardian.minLinesForUserCheckpoint": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Minimum number of lines changed to trigger an automatic user checkpoint"
         },
         "vibeCodeGuardian.maxCheckpointsPerSession": {
           "type": "number",
