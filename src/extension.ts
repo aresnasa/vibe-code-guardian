@@ -47,6 +47,7 @@ let rollbackManager: RollbackManager;
 let treeProvider: TimelineTreeProvider;
 let stateMonitor: StateMonitor;
 let languageStatusBarItem: vscode.StatusBarItem;
+let notificationStatusBarItem: vscode.StatusBarItem;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('🎮 Vibe Code Guardian is activating...');
@@ -123,8 +124,9 @@ export async function activate(context: vscode.ExtensionContext) {
         // Start auto-save timer
         startAutoSaveTimer(context);
 
-        // Create language status bar item
+        // Create status bar items
         createLanguageStatusBar(context);
+        createNotificationStatusBar(context);
 
         // Show welcome and auto-start session
         vscode.window.showInformationMessage('🎮 Vibe Code Guardian activated!');
