@@ -353,6 +353,7 @@ class RollbackTester {
         await this.testHardResetRollback();
         await this.testRollbackPreservesOtherFiles();
         await this.testMultipleRollbacks();
+        await this.testSimulateExtensionFlow();
 
         // Print summary
         console.log('');
