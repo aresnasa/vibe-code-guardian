@@ -464,10 +464,16 @@ export class CheckpointManager {
 
         for (const checkpoint of [...this.storageData.checkpoints]) {
             const validation = await this.validateCheckpoint(checkpoint);
-            if (!validation.valid) {
-                details.push(`Removing "${checkpoint.name}": ${validation.issues.join(', ')}`);
+            
+            // Only remove checkpoints that CANNOT be rolled back to
+            // (missing git commit AND no stored content)
+            if (!validation.canRollback) {
+                details.push(`Removing "${checkpoint.name}": ${validation.issues.filter(i => !i.includes('ok for rollback')).join(', ')}`);
                 await this.deleteCheckpoint(checkpoint.id);
                 removed.push(checkpoint.id);
+            } else if (!validation.valid) {
+                // Log but don't remove - these can still be rolled back
+                details.push(`Keeping "${checkpoint.name}" (can rollback): ${validation.issues.join(', ')}`);
             }
         }
 
