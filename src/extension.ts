@@ -430,6 +430,39 @@ function registerCommands(context: vscode.ExtensionContext) {
             vscode.commands.executeCommand('workbench.action.openSettings', 'vibeCodeGuardian');
         })
     );
+
+    // Initialize Git Repository
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.initGit', async () => {
+            const success = await gitManager.initializeRepository();
+            if (success) {
+                treeProvider.refresh();
+            }
+        })
+    );
+
+    // Show Project Info
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showProjectInfo', async () => {
+            const projectInfo = await gitManager.detectProjectType();
+            const gitStatus = await gitManager.isGitRepository();
+            
+            const items = [
+                `📁 Project: ${projectInfo.name}`,
+                `🔧 Type: ${projectInfo.type}`,
+                projectInfo.framework ? `📦 Framework: ${projectInfo.framework}` : null,
+                projectInfo.packageManager ? `📋 Package Manager: ${projectInfo.packageManager}` : null,
+                `${gitStatus ? '✅' : '❌'} Git Repository: ${gitStatus ? 'Yes' : 'No'}`,
+                `${projectInfo.hasGitignore ? '✅' : '❌'} .gitignore: ${projectInfo.hasGitignore ? 'Present' : 'Missing'}`,
+                gitManager.isGitInstalled() ? `🔧 Git Version: ${gitManager.getGitVersion()}` : '❌ Git: Not Installed'
+            ].filter(Boolean);
+
+            await vscode.window.showQuickPick(items as string[], {
+                placeHolder: 'Project Information',
+                canPickMany: false
+            });
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
