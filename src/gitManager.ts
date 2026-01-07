@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import { simpleGit, SimpleGit, StatusResult } from 'simple-git';
 import * as path from 'path';
+import * as fs from 'fs';
 import { DiffInfo, DiffHunk } from './types';
 
 export class GitManager {
@@ -25,6 +26,59 @@ export class GitManager {
             this.workspaceRoot = workspaceFolders[0].uri.fsPath;
             this.git = simpleGit(this.workspaceRoot);
         }
+    }
+
+    /**
+     * Find the Git root directory for a given file path
+     * This walks up the directory tree to find the .git folder
+     */
+    private findGitRoot(filePath: string): string | undefined {
+        let currentDir = path.dirname(filePath);
+        
+        while (currentDir !== path.dirname(currentDir)) { // Stop at filesystem root
+            const gitDir = path.join(currentDir, '.git');
+            if (fs.existsSync(gitDir)) {
+                return currentDir;
+            }
+            currentDir = path.dirname(currentDir);
+        }
+        
+        return undefined;
+    }
+
+    /**
+     * Get a Git instance for a specific file, ensuring we use the correct repository
+     */
+    public getGitForFile(filePath: string): SimpleGit | null {
+        const gitRoot = this.findGitRoot(filePath);
+        if (gitRoot) {
+            return simpleGit(gitRoot);
+        }
+        return this.git;
+    }
+
+    /**
+     * Re-initialize Git for the current active workspace folder
+     * Call this when the active editor changes to a different workspace
+     */
+    public reinitializeForActiveEditor(): void {
+        const activeEditor = vscode.window.activeTextEditor;
+        if (activeEditor) {
+            const filePath = activeEditor.document.uri.fsPath;
+            const gitRoot = this.findGitRoot(filePath);
+            if (gitRoot && gitRoot !== this.workspaceRoot) {
+                this.workspaceRoot = gitRoot;
+                this.git = simpleGit(gitRoot);
+                console.log(`Git re-initialized for: ${gitRoot}`);
+            }
+        }
+    }
+
+    /**
+     * Get the current workspace root
+     */
+    public getWorkspaceRoot(): string | undefined {
+        return this.workspaceRoot;
     }
 
     /**
