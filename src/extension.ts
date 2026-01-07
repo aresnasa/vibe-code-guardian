@@ -831,6 +831,21 @@ function registerCommands(context: vscode.ExtensionContext) {
             }
         })
     );
+
+    // Toggle Commit Language
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.toggleCommitLanguage', async () => {
+            const settings = checkpointManager.getSettings();
+            const nextLanguage = getNextLanguage(settings.commitLanguage);
+            await checkpointManager.updateSettings({ commitLanguage: nextLanguage });
+            
+            // Update status bar
+            updateLanguageStatusBar(nextLanguage);
+            
+            const displayName = getLanguageDisplayName(nextLanguage);
+            vscode.window.showInformationMessage(`🌐 Commit language changed to: ${displayName}`);
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
