@@ -644,6 +644,107 @@ function registerCommands(context: vscode.ExtensionContext) {
             });
         })
     );
+
+    // Return to Latest State
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.returnToLatest', async () => {
+            const headInfo = await gitManager.getHeadInfo();
+            
+            if (!headInfo.isDetached) {
+                vscode.window.showInformationMessage('You are already at the latest state.');
+                return;
+            }
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Returning to latest state...',
+                cancellable: false
+            }, async () => {
+                // Try to find the main branch
+                const branches = ['master', 'main'];
+                let success = false;
+                
+                for (const branch of branches) {
+                    if (await gitManager.checkoutBranch(branch)) {
+                        success = true;
+                        break;
+                    }
+                }
+
+                if (success) {
+                    vscode.window.showInformationMessage('✅ Returned to latest state!');
+                    treeProvider.refresh();
+                } else {
+                    vscode.window.showErrorMessage('Failed to return to main branch.');
+                }
+            });
+        })
+    );
+
+    // Time Travel to Specific Point
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.timeTravelTo', async () => {
+            // Get all checkpoints with Git commits
+            const checkpoints = checkpointManager.getCheckpoints()
+                .filter(cp => cp.gitCommitHash);
+            
+            if (checkpoints.length === 0) {
+                vscode.window.showWarningMessage('No checkpoints with Git history found.');
+                return;
+            }
+
+            const items = checkpoints.map(cp => ({
+                label: cp.name,
+                description: new Date(cp.timestamp).toLocaleString(),
+                detail: `Commit: ${cp.gitCommitHash?.substring(0, 7)}`,
+                checkpoint: cp
+            }));
+
+            const selected = await vscode.window.showQuickPick(items, {
+                placeHolder: 'Select a checkpoint to travel to',
+                title: '🕐 Time Travel'
+            });
+
+            if (!selected) {
+                return;
+            }
+
+            const result = await rollbackManager.rollback(selected.checkpoint.id, { skipConfirmation: true });
+            
+            if (result.success) {
+                vscode.window.showInformationMessage(result.message);
+                treeProvider.refresh();
+            } else {
+                vscode.window.showErrorMessage(`Time travel failed: ${result.message}`);
+            }
+        })
+    );
+
+    // Show Current Position in History
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showCurrentPosition', async () => {
+            const headInfo = await gitManager.getHeadInfo();
+            
+            if (headInfo.isDetached) {
+                const commitHistory = await gitManager.getCommitHistory(1);
+                const currentMessage = commitHistory.length > 0 ? commitHistory[0].message : 'Unknown';
+                
+                const action = await vscode.window.showInformationMessage(
+                    `📍 Current Position: Detached HEAD at ${headInfo.currentCommit.substring(0, 7)}\n\nCommit: ${currentMessage}`,
+                    'Return to Latest',
+                    'Stay Here'
+                );
+                
+                if (action === 'Return to Latest') {
+                    await vscode.commands.executeCommand('vibeCodeGuardian.returnToLatest');
+                }
+            } else {
+                vscode.window.showInformationMessage(
+                    `📍 Current Position: Branch "${headInfo.branch}" at ${headInfo.currentCommit.substring(0, 7)}`
+                );
+            }
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
