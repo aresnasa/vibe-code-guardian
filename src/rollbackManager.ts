@@ -387,28 +387,6 @@ export class RollbackManager {
                 errors.push(`Git rollback failed: ${error}`);
             }
         }
-                    }
-                }
-
-                if (success) {
-                    // Refresh all open files in VS Code
-                    await this.refreshAllOpenFiles();
-                    
-                    return {
-                        success: true,
-                        message: `Successfully rolled back to: ${checkpoint.name}`,
-                        filesRestored: restoredFiles,
-                        filesNotRestored: [],
-                        errors: []
-                    };
-                } else {
-                    errors.push('Git operation returned false');
-                }
-            } catch (error) {
-                console.error('Git rollback error:', error);
-                errors.push(`Git rollback failed: ${error}`);
-            }
-        }
 
         // Fallback to file content restoration (only if we have changedFiles and Git failed)
         if (checkpoint.changedFiles.length > 0 && errors.length > 0) {
