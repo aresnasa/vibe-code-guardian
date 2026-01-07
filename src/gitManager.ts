@@ -129,13 +129,28 @@ export class GitManager {
      * Create a new commit with the given files
      */
     public async createCommit(files: string[], message: string): Promise<string | undefined> {
-        if (!this.git) {
+        if (!this.git || !this.workspaceRoot) {
             return undefined;
         }
         try {
+            // Convert absolute paths to paths relative to git root
+            const relativePaths = files.map(file => {
+                if (path.isAbsolute(file)) {
+                    // Check if file is within the workspace root
+                    if (file.startsWith(this.workspaceRoot!)) {
+                        return path.relative(this.workspaceRoot!, file);
+                    } else {
+                        // File is outside current git repository - skip it
+                        console.warn(`Skipping file outside repository: ${file}`);
+                        return null;
+                    }
+                }
+                return file;
+            }).filter((f): f is string => f !== null);
+
             // Stage the files
-            if (files.length > 0) {
-                await this.git.add(files);
+            if (relativePaths.length > 0) {
+                await this.git.add(relativePaths);
             } else {
                 // Stage all changes
                 await this.git.add('.');
