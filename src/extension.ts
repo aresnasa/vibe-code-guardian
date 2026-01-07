@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { GitManager } from './gitManager';
 import { CheckpointManager } from './checkpointManager';
 import { AIDetector } from './aiDetector';
-import { RollbackManager } from './rollbackManager';
+import { RollbackManager, DiffContentProvider } from './rollbackManager';
 import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
 import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType } from './types';
 
@@ -45,6 +45,12 @@ export async function activate(context: vscode.ExtensionContext) {
             showCollapseAll: true
         });
         context.subscriptions.push(treeView);
+
+        // Register DiffContentProvider for diff view
+        const diffProvider = new DiffContentProvider();
+        context.subscriptions.push(
+            vscode.workspace.registerTextDocumentContentProvider('vibe-guardian-diff', diffProvider)
+        );
 
         // Register all commands
         registerCommands(context);
