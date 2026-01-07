@@ -476,6 +476,13 @@ function registerCommands(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('vibeCodeGuardian.timeMachine', async () => {
             try {
+                // Debug: Check if gitManager is working
+                const isGitRepo = await gitManager.isGitRepository();
+                if (!isGitRepo) {
+                    vscode.window.showErrorMessage('Not a Git repository. Please initialize Git first.');
+                    return;
+                }
+
                 const commits = await gitManager.getCommitHistory(50);
                 if (commits.length === 0) {
                     vscode.window.showWarningMessage('No commit history found.');
@@ -503,7 +510,7 @@ function registerCommands(context: vscode.ExtensionContext) {
                 // Confirm rollback
                 const confirm = await vscode.window.showWarningMessage(
                     `Rollback to "${selected.commit.message.substring(0, 40)}..."?`,
-                    { modal: true, detail: 'This will discard all changes after this point.' },
+                    { modal: true, detail: 'This will switch to this commit. You can return to latest anytime.' },
                     'Rollback',
                     'Cancel'
                 );
@@ -512,15 +519,30 @@ function registerCommands(context: vscode.ExtensionContext) {
                     return;
                 }
 
-                // Perform rollback using StateMonitor
-                const result = await stateMonitor.rollbackToState(selected.commit.hash);
-                
-                if (result.success) {
-                    vscode.window.showInformationMessage(`✅ ${result.message}`);
-                    treeProvider.refresh();
-                } else {
-                    vscode.window.showErrorMessage(`❌ ${result.message}`);
-                }
+                // Perform rollback directly using gitManager.checkoutCommit
+                vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Time traveling...',
+                    cancellable: false
+                }, async () => {
+                    const success = await gitManager.checkoutCommit(selected.commit.hash);
+                    
+                    if (success) {
+                        // Refresh all open editors
+                        for (const editor of vscode.window.visibleTextEditors) {
+                            const doc = editor.document;
+                            if (doc.uri.scheme === 'file') {
+                                await vscode.commands.executeCommand('workbench.action.files.revert', doc.uri);
+                            }
+                        }
+                        vscode.window.showInformationMessage(
+                            `✅ Traveled to ${selected.commit.hash.substring(0, 7)}! Use "Return to Latest" to go back.`
+                        );
+                        treeProvider.refresh();
+                    } else {
+                        vscode.window.showErrorMessage('❌ Git checkout failed. Check if there are uncommitted changes.');
+                    }
+                });
             } catch (error) {
                 vscode.window.showErrorMessage(`Time Machine failed: ${error}`);
             }
