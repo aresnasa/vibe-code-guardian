@@ -68,6 +68,7 @@ export class RollbackManager {
 
     /**
      * Show diff in VS Code's diff viewer
+     * Uses native VS Code/Git diff when possible
      */
     public async showDiffViewer(checkpointId: string): Promise<void> {
         const checkpoint = this.checkpointManager.getCheckpoint(checkpointId);
@@ -81,13 +82,51 @@ export class RollbackManager {
             return;
         }
 
-        // For each file, show diff
-        for (const file of checkpoint.changedFiles) {
+        // If multiple files, let user select which to view
+        let filesToShow = checkpoint.changedFiles;
+        if (checkpoint.changedFiles.length > 1) {
+            const items = checkpoint.changedFiles.map(f => ({
+                label: path.basename(f.path),
+                description: f.path,
+                detail: `+${f.linesAdded} -${f.linesRemoved}`,
+                file: f
+            }));
+            
+            const selected = await vscode.window.showQuickPick(items, {
+                placeHolder: 'Select a file to view diff',
+                canPickMany: false
+            });
+            
+            if (!selected) {
+                return;
+            }
+            filesToShow = [selected.file];
+        }
+
+        // Show diff for selected file(s)
+        for (const file of filesToShow) {
+            // Try native Git diff first if we have a commit hash
             if (checkpoint.gitCommitHash && await this.gitManager.isGitRepository()) {
-                // Use Git diff
+                const shown = await this.showGitDiff(file.path, checkpoint.gitCommitHash, checkpoint.name);
+                if (shown) {
+                    continue;
+                }
+            }
+            
+            // Fallback to content-based diff
+            if (file.previousContent !== undefined && file.currentContent !== undefined) {
+                await this.showContentDiff(
+                    file.path,
+                    file.previousContent,
+                    file.currentContent,
+                    `Before: ${checkpoint.name}`,
+                    `After: ${checkpoint.name}`
+                );
+            } else if (checkpoint.gitCommitHash) {
+                // Try to get content from Git
                 const oldContent = await this.gitManager.getFileAtCommit(
                     file.path,
-                    `${checkpoint.gitCommitHash}^` // Parent commit
+                    `${checkpoint.gitCommitHash}^`
                 );
                 const newContent = await this.gitManager.getFileAtCommit(
                     file.path,
@@ -102,22 +141,74 @@ export class RollbackManager {
                         `Before: ${checkpoint.name}`,
                         `After: ${checkpoint.name}`
                     );
+                } else {
+                    vscode.window.showWarningMessage(`Cannot show diff for ${path.basename(file.path)}: content not available`);
                 }
-            } else if (file.previousContent !== undefined && file.currentContent !== undefined) {
-                // Use stored snapshots
-                await this.showContentDiff(
-                    file.path,
-                    file.previousContent,
-                    file.currentContent,
-                    `Before: ${checkpoint.name}`,
-                    `After: ${checkpoint.name}`
-                );
+            } else {
+                vscode.window.showWarningMessage(`Cannot show diff for ${path.basename(file.path)}: no previous content saved`);
             }
         }
     }
 
     /**
-     * Show content diff in VS Code
+     * Show Git diff using VS Code's native Git extension
+     */
+    private async showGitDiff(filePath: string, commitHash: string, checkpointName: string): Promise<boolean> {
+        try {
+            // Get the Git extension
+            const gitExtension = vscode.extensions.getExtension('vscode.git');
+            if (!gitExtension) {
+                return false;
+            }
+
+            const git = gitExtension.isActive ? gitExtension.exports : await gitExtension.activate();
+            const api = git.getAPI(1);
+            
+            if (!api || api.repositories.length === 0) {
+                return false;
+            }
+
+            // Find the repository containing this file
+            const fileUri = vscode.Uri.file(filePath);
+            const repo = api.repositories.find((r: any) => 
+                filePath.startsWith(r.rootUri.fsPath)
+            );
+
+            if (!repo) {
+                return false;
+            }
+
+            // Use vscode.git's diff command
+            const relativePath = path.relative(repo.rootUri.fsPath, filePath);
+            
+            // Create Git URI for the old version (parent commit)
+            const oldUri = vscode.Uri.parse(`git:${relativePath}?${JSON.stringify({
+                path: relativePath,
+                ref: `${commitHash}^`
+            })}`);
+            
+            // Create Git URI for the new version (at commit)
+            const newUri = vscode.Uri.parse(`git:${relativePath}?${JSON.stringify({
+                path: relativePath,
+                ref: commitHash
+            })}`);
+
+            await vscode.commands.executeCommand(
+                'vscode.diff',
+                oldUri,
+                newUri,
+                `${path.basename(filePath)}: Before ↔ After (${checkpointName})`
+            );
+
+            return true;
+        } catch (error) {
+            console.warn('Failed to show Git diff:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Show content diff in VS Code using virtual documents
      */
     private async showContentDiff(
         filePath: string,
@@ -127,30 +218,38 @@ export class RollbackManager {
         rightTitle: string
     ): Promise<void> {
         const fileName = path.basename(filePath);
+        const timestamp = Date.now();
         
-        // Create virtual documents for diff
-        const oldUri = vscode.Uri.parse(`vibe-guardian-diff:${fileName}?content=old`);
-        const newUri = vscode.Uri.parse(`vibe-guardian-diff:${fileName}?content=new`);
+        // Create unique URIs with proper encoding
+        // Use a simpler path structure that VS Code can resolve
+        const oldUri = vscode.Uri.parse(`vibe-guardian-diff:/${timestamp}/old/${fileName}`);
+        const newUri = vscode.Uri.parse(`vibe-guardian-diff:/${timestamp}/new/${fileName}`);
 
-        // Store content for text document provider
+        // Store content for text document provider (use toString for consistency)
         DiffContentProvider.setContent(oldUri.toString(), oldContent);
         DiffContentProvider.setContent(newUri.toString(), newContent);
 
-        // Open diff editor
-        await vscode.commands.executeCommand(
-            'vscode.diff',
-            oldUri,
-            newUri,
-            `${leftTitle} ↔ ${rightTitle}`
-        );
+        try {
+            // Open diff editor
+            await vscode.commands.executeCommand(
+                'vscode.diff',
+                oldUri,
+                newUri,
+                `${leftTitle} ↔ ${rightTitle}`
+            );
+        } catch (error) {
+            console.error('Failed to open diff editor:', error);
+            vscode.window.showErrorMessage(`Failed to open diff: ${error}`);
+        }
     }
 
     /**
-     * Rollback to a checkpoint
+     * Rollback to a checkpoint with user confirmation
      */
     public async rollback(checkpointId: string, options?: {
         hard?: boolean;
         createBackup?: boolean;
+        skipConfirmation?: boolean;
     }): Promise<RollbackResult> {
         const checkpoint = this.checkpointManager.getCheckpoint(checkpointId);
         if (!checkpoint) {
@@ -161,6 +260,58 @@ export class RollbackManager {
                 filesNotRestored: [],
                 errors: ['Checkpoint not found']
             };
+        }
+
+        // Show confirmation dialog unless skipped
+        if (!options?.skipConfirmation) {
+            const fileList = checkpoint.changedFiles
+                .map(f => `  • ${path.basename(f.path)}`)
+                .join('\n');
+            
+            const detail = checkpoint.changedFiles.length > 0
+                ? `The following files will be reverted:\n${fileList}`
+                : 'This will restore the project state to this checkpoint.';
+
+            const result = await vscode.window.showWarningMessage(
+                `Are you sure you want to rollback to "${checkpoint.name}"?`,
+                {
+                    modal: true,
+                    detail: detail
+                },
+                { title: 'View Diff First', isCloseAffordance: false },
+                { title: 'Rollback', isCloseAffordance: false },
+                { title: 'Cancel', isCloseAffordance: true }
+            );
+
+            if (!result || result.title === 'Cancel') {
+                return {
+                    success: false,
+                    message: 'Rollback cancelled by user',
+                    filesRestored: [],
+                    filesNotRestored: [],
+                    errors: []
+                };
+            }
+
+            if (result.title === 'View Diff First') {
+                await this.showDiffViewer(checkpointId);
+                // After viewing diff, ask again
+                const confirmResult = await vscode.window.showWarningMessage(
+                    `Proceed with rollback to "${checkpoint.name}"?`,
+                    { modal: true },
+                    'Yes, Rollback',
+                    'Cancel'
+                );
+                if (confirmResult !== 'Yes, Rollback') {
+                    return {
+                        success: false,
+                        message: 'Rollback cancelled after diff preview',
+                        filesRestored: [],
+                        filesNotRestored: [],
+                        errors: []
+                    };
+                }
+            }
         }
 
         const filesRestored: string[] = [];
@@ -352,19 +503,57 @@ export class RollbackManager {
 
 /**
  * Content provider for diff view
+ * Handles virtual documents for showing checkpoint diffs
  */
 export class DiffContentProvider implements vscode.TextDocumentContentProvider {
     private static contents: Map<string, string> = new Map();
+    private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
     
-    public static setContent(uri: string, content: string): void {
-        this.contents.set(uri, content);
+    public readonly onDidChange = this._onDidChange.event;
+    
+    public static setContent(uriString: string, content: string): void {
+        this.contents.set(uriString, content);
     }
 
-    public static clearContent(uri: string): void {
-        this.contents.delete(uri);
+    public static getContent(uriString: string): string | undefined {
+        return this.contents.get(uriString);
+    }
+
+    public static clearContent(uriString: string): void {
+        this.contents.delete(uriString);
+    }
+
+    public static clearAll(): void {
+        this.contents.clear();
     }
 
     provideTextDocumentContent(uri: vscode.Uri): string {
-        return DiffContentProvider.contents.get(uri.toString()) || '';
+        // Try exact match first
+        let content = DiffContentProvider.contents.get(uri.toString());
+        if (content !== undefined) {
+            return content;
+        }
+        
+        // Try with decoded URI
+        const decodedUri = decodeURIComponent(uri.toString());
+        content = DiffContentProvider.contents.get(decodedUri);
+        if (content !== undefined) {
+            return content;
+        }
+        
+        // Try to find by path portion
+        const uriPath = uri.path;
+        for (const [key, value] of DiffContentProvider.contents.entries()) {
+            if (key.includes(uriPath) || decodeURIComponent(key).includes(uriPath)) {
+                return value;
+            }
+        }
+        
+        return `// Content not found for: ${uri.toString()}`;
+    }
+
+    public dispose(): void {
+        this._onDidChange.dispose();
+        DiffContentProvider.clearAll();
     }
 }
