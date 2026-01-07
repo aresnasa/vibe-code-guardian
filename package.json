@@ -126,6 +126,18 @@
         "title": "Show File Diff",
         "icon": "$(diff)",
         "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.initGit",
+        "title": "Initialize Git Repository",
+        "icon": "$(git-branch-create)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showProjectInfo",
+        "title": "Show Project Info",
+        "icon": "$(info)",
+        "category": "Vibe Guardian"
       }
     ],
     "menus": {
