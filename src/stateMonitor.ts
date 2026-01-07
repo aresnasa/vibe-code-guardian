@@ -333,15 +333,26 @@ export class StateMonitor {
     }
 
     /**
-     * Rollback to a specific state/commit
+     * Rollback to a specific state/commit using checkout (preserves history)
+     * This allows switching back and forth between different states
      */
     public async rollbackToState(commitHash: string): Promise<{ success: boolean; message: string }> {
         try {
-            // First, save current state as backup
-            await this.captureState('Backup before rollback');
+            // First, check if there are uncommitted changes
+            const hasChanges = await this.gitManager.hasUncommittedChanges();
+            
+            if (hasChanges) {
+                // Auto-save current state before switching
+                const saved = await this.captureState('Auto-save before time travel');
+                if (!saved) {
+                    // If can't save, stash changes
+                    await this.gitManager.stash('Vibe Guardian: stash before time travel');
+                }
+            }
 
-            // Perform hard reset
-            const success = await this.gitManager.rollbackToCommit(commitHash, true);
+            // Use checkout instead of reset to preserve history
+            // This creates a detached HEAD state
+            const success = await this.gitManager.checkoutCommit(commitHash);
             
             if (success) {
                 // Refresh all open files
@@ -349,20 +360,63 @@ export class StateMonitor {
                 
                 return {
                     success: true,
-                    message: `Successfully rolled back to ${commitHash.substring(0, 7)}`
+                    message: `Successfully traveled to ${commitHash.substring(0, 7)}. You are in detached HEAD state - create a checkpoint to save changes.`
                 };
             } else {
                 return {
                     success: false,
-                    message: 'Git reset failed'
+                    message: 'Git checkout failed'
                 };
             }
         } catch (error) {
             return {
                 success: false,
-                message: `Rollback failed: ${error}`
+                message: `Time travel failed: ${error}`
             };
         }
+    }
+
+    /**
+     * Return to the latest state (HEAD of main branch)
+     */
+    public async returnToLatest(): Promise<{ success: boolean; message: string }> {
+        try {
+            // Get the main branch name
+            const branch = await this.gitManager.getCurrentBranch();
+            const mainBranch = branch || 'master';
+            
+            // Checkout main branch
+            const success = await this.gitManager.checkoutBranch(mainBranch);
+            
+            if (success) {
+                await this.refreshAllEditors();
+                return {
+                    success: true,
+                    message: `Returned to latest state (${mainBranch})`
+                };
+            } else {
+                return {
+                    success: false,
+                    message: 'Failed to return to main branch'
+                };
+            }
+        } catch (error) {
+            return {
+                success: false,
+                message: `Failed to return: ${error}`
+            };
+        }
+    }
+
+    /**
+     * Get current position info (branch/detached HEAD status)
+     */
+    public async getCurrentPosition(): Promise<{
+        isDetached: boolean;
+        currentCommit: string;
+        branch?: string;
+    }> {
+        return await this.gitManager.getHeadInfo();
     }
 
     /**
