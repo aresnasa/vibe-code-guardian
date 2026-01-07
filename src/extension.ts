@@ -80,6 +80,11 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.workspace.registerTextDocumentContentProvider('vibe-guardian-diff', diffProvider)
         );
 
+        // Initialize and start State Monitor
+        stateMonitor = new StateMonitor(gitManager);
+        stateMonitor.start();
+        context.subscriptions.push({ dispose: () => stateMonitor.dispose() });
+
         // Register all commands
         registerCommands(context);
 
