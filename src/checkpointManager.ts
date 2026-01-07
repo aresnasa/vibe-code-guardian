@@ -163,17 +163,34 @@ export class CheckpointManager {
         const id = this.generateId();
         const name = options?.name || this.generateCheckpointName(type, source);
 
-        // Get Git commit if enabled
+        // Sync with Git: Get actual changed files from Git status
         let gitCommitHash: string | undefined;
+        let actualChangedFiles = changedFiles;
+        
         if (this.storageData.settings.enableGit && await this.gitManager.isGitRepository()) {
             try {
+                // Use Git's actual changed files list for accuracy
+                const gitChangedFiles = await this.gitManager.getDetailedChangedFiles();
+                
+                if (gitChangedFiles.length > 0) {
+                    // Convert to ChangedFile format, filtering out files that don't exist
+                    actualChangedFiles = await this.syncChangedFilesWithGit(changedFiles, gitChangedFiles);
+                }
+
+                // Stage all and commit
                 const commitMessage = `[Vibe Guardian] ${name}`;
-                gitCommitHash = await this.gitManager.createCommit(
-                    changedFiles.map(f => f.path),
-                    commitMessage
-                );
+                const commitResult = await this.gitManager.stageAndCommitAll(commitMessage);
+                
+                if (commitResult.success && commitResult.commitHash) {
+                    gitCommitHash = commitResult.commitHash;
+                    
+                    // Update changedFiles with actual committed files
+                    if (commitResult.changedFiles.length > 0) {
+                        actualChangedFiles = await this.convertToChangedFiles(commitResult.changedFiles);
+                    }
+                }
             } catch (error) {
-                console.warn('Failed to create Git commit:', error);
+                console.warn('Failed to sync with Git:', error);
             }
         }
 
@@ -189,7 +206,7 @@ export class CheckpointManager {
             gitCommitHash,
             type,
             source,
-            changedFiles,
+            changedFiles: actualChangedFiles,
             sessionId: this.storageData.activeSessionId!,
             parentId,
             tags: options?.tags || [],
