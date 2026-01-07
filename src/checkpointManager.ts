@@ -211,6 +211,11 @@ export class CheckpointManager {
         await this.saveStorageData();
         this._onCheckpointCreated.fire(checkpoint);
 
+        // Push to remote based on push strategy
+        if (gitCommitHash && this.storageData.settings.enableGit) {
+            await this.handlePushStrategy(checkpoint);
+        }
+
         // Show notification if enabled
         if (this.storageData.settings.showNotifications) {
             vscode.window.showInformationMessage(
@@ -224,6 +229,50 @@ export class CheckpointManager {
         }
 
         return checkpoint;
+    }
+
+    /**
+     * Handle push to remote based on push strategy
+     */
+    private async handlePushStrategy(checkpoint: Checkpoint): Promise<void> {
+        const strategy = this.storageData.settings.pushStrategy;
+        
+        if (strategy === 'none') {
+            return;
+        }
+
+        const shouldPush = this.shouldPushCheckpoint(checkpoint, strategy);
+        
+        if (shouldPush) {
+            try {
+                const result = await this.gitManager.pushToRemote();
+                if (result.success) {
+                    console.log(`📤 Pushed milestone checkpoint: ${checkpoint.name}`);
+                } else if (!result.message.includes('not found')) {
+                    // Only log if it's not a "remote not found" error (common for local-only repos)
+                    console.warn(`Push skipped: ${result.message}`);
+                }
+            } catch (error) {
+                console.warn('Push failed:', error);
+            }
+        }
+    }
+
+    /**
+     * Determine if a checkpoint should be pushed based on strategy
+     */
+    private shouldPushCheckpoint(checkpoint: Checkpoint, strategy: PushStrategy): boolean {
+        if (strategy === 'all') {
+            return true;
+        }
+        
+        if (strategy === 'milestone') {
+            // Only push manual checkpoints and session starts (milestones)
+            return checkpoint.type === CheckpointType.Manual || 
+                   checkpoint.type === CheckpointType.SessionStart;
+        }
+        
+        return false;
     }
 
     /**
