@@ -26,6 +26,15 @@ export class AIDetector {
     
     public readonly onAIEditDetected = this._onAIEditDetected.event;
 
+    // Event for ANY file change (including user changes)
+    private _onFileChanged: vscode.EventEmitter<{
+        source: CheckpointSource;
+        changedFiles: ChangedFile[];
+        isNewFile?: boolean;
+    }> = new vscode.EventEmitter();
+    
+    public readonly onFileChanged = this._onFileChanged.event;
+
     // Track which extensions are making changes
     private activeExtensions: Set<string> = new Set();
     
@@ -67,6 +76,21 @@ export class AIDetector {
         // Listen for document save
         this.disposables.push(
             vscode.workspace.onDidSaveTextDocument(this.onDocumentSave.bind(this))
+        );
+
+        // Listen for file creation
+        this.disposables.push(
+            vscode.workspace.onDidCreateFiles(this.onFilesCreated.bind(this))
+        );
+
+        // Listen for file deletion
+        this.disposables.push(
+            vscode.workspace.onDidDeleteFiles(this.onFilesDeleted.bind(this))
+        );
+
+        // Listen for file rename
+        this.disposables.push(
+            vscode.workspace.onDidRenameFiles(this.onFilesRenamed.bind(this))
         );
 
         // Track extension activation
@@ -272,8 +296,12 @@ export class AIDetector {
             this.fileSnapshots.set(uri, currentContent);
         }
 
-        // Emit events for AI-generated changes
+        // Emit events for all changes
         for (const [source, changedFiles] of changesBySource) {
+            // Always emit file changed event for any change
+            this._onFileChanged.fire({ source, changedFiles });
+            
+            // Also emit AI-specific event for AI changes
             if (source !== CheckpointSource.User) {
                 this._onAIEditDetected.fire({ source, changedFiles });
             }
@@ -296,6 +324,132 @@ export class AIDetector {
     private onDocumentSave(document: vscode.TextDocument): void {
         // Update snapshot on save
         this.createSnapshot(document);
+    }
+
+    /**
+     * Handle files created
+     */
+    private onFilesCreated(event: vscode.FileCreateEvent): void {
+        const changedFiles: ChangedFile[] = [];
+        
+        for (const uri of event.files) {
+            // Skip ignored paths
+            if (this.shouldIgnorePath(uri.fsPath)) {
+                continue;
+            }
+            
+            changedFiles.push({
+                path: uri.fsPath,
+                changeType: FileChangeType.Added,
+                linesAdded: 0,
+                linesRemoved: 0
+            });
+        }
+
+        if (changedFiles.length > 0) {
+            const source = this.detectActiveAISource();
+            this._onFileChanged.fire({ source, changedFiles, isNewFile: true });
+            
+            if (source !== CheckpointSource.User) {
+                this._onAIEditDetected.fire({ source, changedFiles });
+            }
+        }
+    }
+
+    /**
+     * Handle files deleted
+     */
+    private onFilesDeleted(event: vscode.FileDeleteEvent): void {
+        const changedFiles: ChangedFile[] = [];
+        
+        for (const uri of event.files) {
+            if (this.shouldIgnorePath(uri.fsPath)) {
+                continue;
+            }
+            
+            // Remove from snapshots
+            this.fileSnapshots.delete(uri.toString());
+            
+            changedFiles.push({
+                path: uri.fsPath,
+                changeType: FileChangeType.Deleted,
+                linesAdded: 0,
+                linesRemoved: 0
+            });
+        }
+
+        if (changedFiles.length > 0) {
+            const source = this.detectActiveAISource();
+            this._onFileChanged.fire({ source, changedFiles });
+            
+            if (source !== CheckpointSource.User) {
+                this._onAIEditDetected.fire({ source, changedFiles });
+            }
+        }
+    }
+
+    /**
+     * Handle files renamed
+     */
+    private onFilesRenamed(event: vscode.FileRenameEvent): void {
+        const changedFiles: ChangedFile[] = [];
+        
+        for (const { oldUri, newUri } of event.files) {
+            if (this.shouldIgnorePath(newUri.fsPath)) {
+                continue;
+            }
+            
+            // Update snapshots
+            const oldContent = this.fileSnapshots.get(oldUri.toString());
+            if (oldContent) {
+                this.fileSnapshots.delete(oldUri.toString());
+                this.fileSnapshots.set(newUri.toString(), oldContent);
+            }
+            
+            changedFiles.push({
+                path: newUri.fsPath,
+                changeType: FileChangeType.Renamed,
+                linesAdded: 0,
+                linesRemoved: 0
+            });
+        }
+
+        if (changedFiles.length > 0) {
+            const source = this.detectActiveAISource();
+            this._onFileChanged.fire({ source, changedFiles });
+            
+            if (source !== CheckpointSource.User) {
+                this._onAIEditDetected.fire({ source, changedFiles });
+            }
+        }
+    }
+
+    /**
+     * Check if a file path should be ignored
+     */
+    private shouldIgnorePath(fsPath: string): boolean {
+        const ignoredPatterns = [
+            'node_modules',
+            '.git',
+            '.vscode-test',
+            'out',
+            'dist',
+            '.vscodeignore'
+        ];
+        return ignoredPatterns.some(pattern => fsPath.includes(pattern));
+    }
+
+    /**
+     * Detect if any AI extension is currently active
+     */
+    private detectActiveAISource(): CheckpointSource {
+        for (const [extensionId, source] of Object.entries(this.AI_EXTENSIONS)) {
+            const extension = vscode.extensions.getExtension(extensionId);
+            if (extension?.isActive) {
+                return source;
+            }
+        }
+        return CheckpointSource.User;
     }
 
     /**
@@ -382,5 +536,6 @@ export class AIDetector {
         }
         this.disposables.forEach(d => d.dispose());
         this._onAIEditDetected.dispose();
+        this._onFileChanged.dispose();
     }
 }
