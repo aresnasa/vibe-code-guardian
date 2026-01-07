@@ -370,29 +370,48 @@ export class RollbackManager {
 
         // Use Git rollback if we have a commit hash
         if (checkpoint.gitCommitHash && await this.gitManager.isGitRepository()) {
-            console.log(`Attempting Git rollback to commit: ${checkpoint.gitCommitHash}`);
+            console.log(`Attempting Git time travel to commit: ${checkpoint.gitCommitHash}`);
             
             try {
-                // Use hard reset by default for reliable rollback
-                const success = await this.gitManager.rollbackToCommit(checkpoint.gitCommitHash, true);
+                // Check current HEAD state first
+                const headInfo = await this.gitManager.getHeadInfo();
+                
+                // If there are uncommitted changes, auto-save first
+                if (await this.gitManager.hasUncommittedChanges()) {
+                    try {
+                        // Create a backup commit
+                        await this.gitManager.createCommit(
+                            ['.'],
+                            '[Vibe Guardian] 🔄 Auto-save before time travel'
+                        );
+                    } catch {
+                        // If commit fails, stash instead
+                        await this.gitManager.stash('Vibe Guardian: auto-stash before time travel');
+                    }
+                }
+
+                // Use checkout for time travel (preserves all history)
+                const success = await this.gitManager.checkoutCommit(checkpoint.gitCommitHash);
                 
                 if (success) {
                     // Refresh all open files in VS Code
                     await this.refreshAllOpenFiles();
                     
+                    const isDetached = !(await this.gitManager.getCurrentBranch());
+                    
                     return {
                         success: true,
-                        message: `Successfully rolled back to: ${checkpoint.name}`,
-                        filesRestored: ['All files (hard reset)'],
+                        message: `✅ Time traveled to: ${checkpoint.name}${isDetached ? ' (detached HEAD - use "Return to Latest" to go back)' : ''}`,
+                        filesRestored: ['All files (checkout)'],
                         filesNotRestored: [],
                         errors: []
                     };
                 } else {
-                    errors.push('Git reset returned false');
+                    errors.push('Git checkout returned false');
                 }
             } catch (error) {
-                console.error('Git rollback error:', error);
-                errors.push(`Git rollback failed: ${error}`);
+                console.error('Git time travel error:', error);
+                errors.push(`Git time travel failed: ${error}`);
             }
         }
 
