@@ -19,6 +19,7 @@ let aiDetector: AIDetector;
 let rollbackManager: RollbackManager;
 let treeProvider: TimelineTreeProvider;
 let stateMonitor: StateMonitor;
+let languageStatusBarItem: vscode.StatusBarItem;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('🎮 Vibe Code Guardian is activating...');
