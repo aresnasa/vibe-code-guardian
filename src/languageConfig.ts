@@ -4,7 +4,7 @@
  */
 
 import * as vscode from 'vscode';
-import { CheckpointType, CheckpointSource, CommitLanguage } from './types';
+import { CheckpointType, CheckpointSource, CommitLanguage, NotificationLevel } from './types';
 
 /** Language strings for checkpoint names and commit messages */
 export interface LanguageStrings {
