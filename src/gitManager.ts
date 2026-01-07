@@ -145,17 +145,28 @@ export class GitManager {
                 
                 // Detect framework
                 const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-                if (deps['next']) info.framework = 'Next.js';
-                else if (deps['react']) info.framework = 'React';
-                else if (deps['vue']) info.framework = 'Vue';
-                else if (deps['@angular/core']) info.framework = 'Angular';
-                else if (deps['express']) info.framework = 'Express';
-                else if (deps['vscode']) info.framework = 'VS Code Extension';
+                if (deps['next']) {
+                    info.framework = 'Next.js';
+                } else if (deps['react']) {
+                    info.framework = 'React';
+                } else if (deps['vue']) {
+                    info.framework = 'Vue';
+                } else if (deps['@angular/core']) {
+                    info.framework = 'Angular';
+                } else if (deps['express']) {
+                    info.framework = 'Express';
+                } else if (deps['vscode']) {
+                    info.framework = 'VS Code Extension';
+                }
 
                 // Detect package manager
-                if (files.includes('pnpm-lock.yaml')) info.packageManager = 'pnpm';
-                else if (files.includes('yarn.lock')) info.packageManager = 'yarn';
-                else if (files.includes('package-lock.json')) info.packageManager = 'npm';
+                if (files.includes('pnpm-lock.yaml')) {
+                    info.packageManager = 'pnpm';
+                } else if (files.includes('yarn.lock')) {
+                    info.packageManager = 'yarn';
+                } else if (files.includes('package-lock.json')) {
+                    info.packageManager = 'npm';
+                }
             } catch {
                 info.name = 'Node.js Project';
             }
@@ -165,9 +176,13 @@ export class GitManager {
                  files.includes('pyproject.toml') || files.includes('Pipfile')) {
             info.type = 'python';
             info.name = path.basename(this.workspaceRoot);
-            if (files.includes('pyproject.toml')) info.packageManager = 'poetry';
-            else if (files.includes('Pipfile')) info.packageManager = 'pipenv';
-            else info.packageManager = 'pip';
+            if (files.includes('pyproject.toml')) {
+                info.packageManager = 'poetry';
+            } else if (files.includes('Pipfile')) {
+                info.packageManager = 'pipenv';
+            } else {
+                info.packageManager = 'pip';
+            }
         }
         // Go
         else if (files.includes('go.mod')) {
@@ -296,7 +311,9 @@ export class GitManager {
      * Create .gitignore based on project type
      */
     private async createGitignore(projectType: ProjectInfo['type']): Promise<void> {
-        if (!this.workspaceRoot) return;
+        if (!this.workspaceRoot) {
+            return;
+        }
 
         const gitignorePath = path.join(this.workspaceRoot, '.gitignore');
         
@@ -490,14 +507,6 @@ Thumbs.db
 
         fs.writeFileSync(gitignorePath, content, 'utf8');
         console.log(`Created .gitignore for ${projectType} project`);
-    }
-
-export class GitManager {
-    private git: SimpleGit | null = null;
-    private workspaceRoot: string | undefined;
-
-    constructor() {
-        this.initializeGit();
     }
 
     /**
