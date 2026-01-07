@@ -92,6 +92,9 @@ export type CommitLanguage = 'en' | 'zh' | 'auto';
 /** Notification level for checkpoints */
 export type NotificationLevel = 'all' | 'milestone' | 'none';
 
+/** Push strategy for remote repository */
+export type PushStrategy = 'none' | 'milestone' | 'all';
+
 export interface CodingSession {
     /** Unique session identifier */
     id: string;
@@ -151,6 +154,8 @@ export interface GuardianSettings {
     ignorePatterns: string[];
     /** Commit message language: 'en', 'zh', or 'auto' (detect from VS Code) */
     commitLanguage: CommitLanguage;
+    /** Push strategy: 'none' = never push, 'milestone' = only manual checkpoints, 'all' = push all commits */
+    pushStrategy: PushStrategy;
 }
 
 export interface RollbackResult {
