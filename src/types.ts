@@ -89,6 +89,9 @@ export enum FileChangeType {
 /** Commit message language */
 export type CommitLanguage = 'en' | 'zh' | 'auto';
 
+/** Notification level for checkpoints */
+export type NotificationLevel = 'all' | 'milestone' | 'none';
+
 export interface CodingSession {
     /** Unique session identifier */
     id: string;
@@ -138,8 +141,10 @@ export interface GuardianSettings {
     enableGit: boolean;
     /** Create branch for each session */
     createSessionBranch: boolean;
-    /** Show notifications on checkpoint */
+    /** Show notifications on checkpoint (deprecated, use notificationLevel) */
     showNotifications: boolean;
+    /** Notification level: 'all' = show all, 'milestone' = only manual/session, 'none' = silent */
+    notificationLevel: NotificationLevel;
     /** Checkpoint naming pattern */
     namingPattern: string;
     /** Files/patterns to ignore */
@@ -180,6 +185,7 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
     enableGit: true,
     createSessionBranch: false,
     showNotifications: true,
+    notificationLevel: 'milestone', // Only show for manual/milestone checkpoints by default
     namingPattern: '{type}-{timestamp}',
     ignorePatterns: [
         'node_modules/**',
