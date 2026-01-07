@@ -212,3 +212,35 @@ export function getNextNotificationLevel(current: NotificationLevel): Notificati
             return 'milestone';
     }
 }
+
+/**
+ * Gets the display name for push strategy
+ * @param strategy Push strategy
+ * @returns Display name with icon
+ */
+export function getPushStrategyDisplayName(strategy: PushStrategy): string {
+    switch (strategy) {
+        case 'all':
+            return '📤 Push All';
+        case 'milestone':
+            return '🎯 Milestone Only';
+        case 'none':
+            return '🚫 No Push';
+    }
+}
+
+/**
+ * Gets the next push strategy in the cycle: milestone -> all -> none -> milestone
+ * @param current Current push strategy
+ * @returns Next push strategy
+ */
+export function getNextPushStrategy(current: PushStrategy): PushStrategy {
+    switch (current) {
+        case 'milestone':
+            return 'all';
+        case 'all':
+            return 'none';
+        case 'none':
+            return 'milestone';
+    }
+}
