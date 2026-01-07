@@ -1041,6 +1041,31 @@ function updateLanguageStatusBar(language: CommitLanguage) {
     }
 }
 
+/**
+ * Creates the notification level status bar item
+ */
+function createNotificationStatusBar(context: vscode.ExtensionContext) {
+    notificationStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    notificationStatusBarItem.command = 'vibeCodeGuardian.toggleNotificationLevel';
+    notificationStatusBarItem.tooltip = 'Click to toggle notification level (All/Milestone/None)';
+    
+    // Initialize with current setting
+    const settings = checkpointManager.getSettings();
+    updateNotificationStatusBar(settings.notificationLevel);
+    
+    notificationStatusBarItem.show();
+    context.subscriptions.push(notificationStatusBarItem);
+}
+
+/**
+ * Updates the notification status bar item text
+ */
+function updateNotificationStatusBar(level: NotificationLevel) {
+    if (notificationStatusBarItem) {
+        notificationStatusBarItem.text = getNotificationLevelDisplayName(level);
+    }
+}
+
 export function deactivate() {
     if (autoSaveInterval) {
         clearInterval(autoSaveInterval);
