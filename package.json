@@ -156,6 +156,24 @@
         "title": "Show Timeline / Checkpoints",
         "icon": "$(list-tree)",
         "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.cleanupHistory",
+        "title": "Cleanup Invalid History",
+        "icon": "$(trash)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.clearAllHistory",
+        "title": "Clear All History (Reset)",
+        "icon": "$(clear-all)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.syncWithGit",
+        "title": "Sync Checkpoints with Git",
+        "icon": "$(sync)",
+        "category": "Vibe Guardian"
       }
     ],
     "menus": {
