@@ -711,21 +711,6 @@ Thumbs.db
     }
 
     /**
-     * Get current branch name
-     */
-    public async getCurrentBranch(): Promise<string | undefined> {
-        if (!this.git) {
-            return undefined;
-        }
-        try {
-            const status = await this.git.status();
-            return status.current || undefined;
-        } catch {
-            return undefined;
-        }
-    }
-
-    /**
      * Push commits to remote repository
      * @param remoteName Remote name (default: 'origin')
      * @param branchName Branch to push (default: current branch)
