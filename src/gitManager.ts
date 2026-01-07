@@ -774,21 +774,70 @@ Thumbs.db
         const errors: string[] = [];
         
         try {
-            // Get list of files that changed between the commit and current HEAD
-            const diffSummary = await this.git.diffSummary([commitHash, 'HEAD']);
+            // First, try to get the list of changed files between commit and HEAD
+            let filesToRestore: string[] = [];
             
-            for (const file of diffSummary.files) {
+            try {
+                // Get files that differ between the commit and current HEAD
+                const diffSummary = await this.git.diffSummary([commitHash, 'HEAD']);
+                filesToRestore = diffSummary.files.map(f => f.file);
+            } catch (diffError) {
+                console.warn('Failed to get diff summary:', diffError);
+            }
+            
+            // If no diff found, try getting files changed since that commit
+            if (filesToRestore.length === 0) {
                 try {
-                    // Restore each file from the commit
-                    await this.git.checkout([commitHash, '--', file.file]);
-                    restoredFiles.push(file.file);
-                } catch (fileError) {
-                    errors.push(`Failed to restore ${file.file}: ${fileError}`);
+                    // Get all files that were modified after this commit
+                    const log = await this.git.log({
+                        from: commitHash,
+                        to: 'HEAD',
+                        '--name-only': null
+                    });
+                    
+                    const files = new Set<string>();
+                    for (const commit of log.all) {
+                        // Parse the diff to get file names
+                        if ((commit as any).diff) {
+                            const diff = (commit as any).diff;
+                            if (diff.files) {
+                                diff.files.forEach((f: any) => files.add(f.file));
+                            }
+                        }
+                    }
+                    filesToRestore = Array.from(files);
+                } catch (logError) {
+                    console.warn('Failed to get log:', logError);
+                }
+            }
+            
+            // If still no files, use git checkout to restore the entire tree
+            if (filesToRestore.length === 0) {
+                try {
+                    // Restore all tracked files to the commit state
+                    await this.git.checkout([commitHash, '--', '.']);
+                    return {
+                        success: true,
+                        restoredFiles: ['All tracked files'],
+                        errors: []
+                    };
+                } catch (checkoutError) {
+                    errors.push(`Failed to checkout all files: ${checkoutError}`);
+                }
+            } else {
+                // Restore each file individually
+                for (const file of filesToRestore) {
+                    try {
+                        await this.git.checkout([commitHash, '--', file]);
+                        restoredFiles.push(file);
+                    } catch (fileError) {
+                        errors.push(`Failed to restore ${file}: ${fileError}`);
+                    }
                 }
             }
             
             return {
-                success: restoredFiles.length > 0,
+                success: restoredFiles.length > 0 || errors.length === 0,
                 restoredFiles,
                 errors
             };
@@ -796,7 +845,7 @@ Thumbs.db
             return {
                 success: false,
                 restoredFiles,
-                errors: [`Failed to get diff: ${error}`]
+                errors: [`Failed to restore: ${error}`]
             };
         }
     }
