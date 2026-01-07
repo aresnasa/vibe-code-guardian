@@ -200,5 +200,6 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
         'out/**',
         'dist/**'
     ],
-    commitLanguage: 'auto'
+    commitLanguage: 'auto',
+    pushStrategy: 'milestone' // Only push milestone checkpoints to remote
 };
