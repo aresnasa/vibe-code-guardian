@@ -174,7 +174,15 @@ export class RollbackManager {
                     `After: ${checkpoint.name} (current content)`
                 );
             } else {
-                vscode.window.showWarningMessage(`Cannot show diff for ${path.basename(file.path)}: file not found`);
+                // File doesn't exist anymore - offer to cleanup
+                const action = await vscode.window.showWarningMessage(
+                    `Cannot show diff for ${path.basename(file.path)}: file not found. This checkpoint may contain outdated data.`,
+                    'Cleanup Invalid History',
+                    'Ignore'
+                );
+                if (action === 'Cleanup Invalid History') {
+                    await vscode.commands.executeCommand('vibeCodeGuardian.cleanupHistory');
+                }
             }
         }
     }
