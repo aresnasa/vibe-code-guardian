@@ -144,6 +144,8 @@ export interface GuardianSettings {
     namingPattern: string;
     /** Files/patterns to ignore */
     ignorePatterns: string[];
+    /** Commit message language: 'en', 'zh', or 'auto' (detect from VS Code) */
+    commitLanguage: CommitLanguage;
 }
 
 export interface RollbackResult {
