@@ -220,7 +220,7 @@ export class CheckpointManager {
         const session = this.getActiveSession();
         if (session) {
             session.checkpointIds.push(id);
-            session.totalFilesChanged += changedFiles.length;
+            session.totalFilesChanged += actualChangedFiles.length;
             if (source !== CheckpointSource.User && source !== CheckpointSource.AutoSave && source !== CheckpointSource.FileWatcher) {
                 if (!session.aiToolsUsed.includes(source)) {
                     session.aiToolsUsed.push(source);
@@ -247,6 +247,57 @@ export class CheckpointManager {
         }
 
         return checkpoint;
+    }
+
+    /**
+     * Sync changed files with Git status - ensures accuracy
+     */
+    private async syncChangedFilesWithGit(
+        originalFiles: ChangedFile[],
+        gitFiles: Array<{ path: string; changeType: 'added' | 'modified' | 'deleted' | 'renamed'; staged: boolean }>
+    ): Promise<ChangedFile[]> {
+        const result: ChangedFile[] = [];
+        const gitFilePaths = new Set(gitFiles.map(f => f.path));
+
+        // Add Git files that match original files or are new
+        for (const gitFile of gitFiles) {
+            const originalFile = originalFiles.find(f => f.path.endsWith(gitFile.path) || gitFile.path.endsWith(f.path));
+            
+            result.push({
+                path: gitFile.path,
+                changeType: this.mapChangeType(gitFile.changeType),
+                linesAdded: originalFile?.linesAdded ?? 0,
+                linesRemoved: originalFile?.linesRemoved ?? 0,
+                previousContent: originalFile?.previousContent,
+                currentContent: originalFile?.currentContent
+            });
+        }
+
+        return result;
+    }
+
+    /**
+     * Convert file paths to ChangedFile format
+     */
+    private async convertToChangedFiles(filePaths: string[]): Promise<ChangedFile[]> {
+        return filePaths.map(filePath => ({
+            path: filePath,
+            changeType: FileChangeType.Modified,
+            linesAdded: 0,
+            linesRemoved: 0
+        }));
+    }
+
+    /**
+     * Map Git change type to FileChangeType
+     */
+    private mapChangeType(gitChangeType: 'added' | 'modified' | 'deleted' | 'renamed'): FileChangeType {
+        switch (gitChangeType) {
+            case 'added': return FileChangeType.Added;
+            case 'deleted': return FileChangeType.Deleted;
+            case 'renamed': return FileChangeType.Modified;
+            default: return FileChangeType.Modified;
+        }
     }
 
     /**
