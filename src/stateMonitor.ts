@@ -1,0 +1,472 @@
+/**
+ * Vibe Code Guardian - State Monitor
+ * Periodically monitors file changes and creates Git commits for tracking
+ */
+
+import * as vscode from 'vscode';
+import { GitManager } from './gitManager';
+
+export interface StateSnapshot {
+    id: string;
+    timestamp: number;
+    commitHash: string;
+    message: string;
+    filesChanged: string[];
+}
+
+export class StateMonitor {
+    private gitManager: GitManager;
+    private checkInterval: NodeJS.Timeout | null = null;
+    private fileWatcher: vscode.FileSystemWatcher | null = null;
+    private pendingChanges: Set<string> = new Set();
+    private lastCommitTime: number = 0;
+    private isEnabled: boolean = true;
+    private stateHistory: StateSnapshot[] = [];
+    
+    // Configuration
+    private checkIntervalMs: number = 30000; // 30 seconds
+    private minTimeBetweenCommits: number = 10000; // 10 seconds
+    private autoCommitEnabled: boolean = true;
+
+    private _onStateChanged = new vscode.EventEmitter<StateSnapshot>();
+    public readonly onStateChanged = this._onStateChanged.event;
+
+    constructor(gitManager: GitManager) {
+        this.gitManager = gitManager;
+        this.loadHistory();
+    }
+
+    /**
+     * Start monitoring file changes
+     */
+    public start(): void {
+        if (!this.isEnabled) {
+            return;
+        }
+
+        console.log('🔍 State Monitor started');
+
+        // Start periodic check
+        this.startPeriodicCheck();
+
+        // Watch for file changes
+        this.startFileWatcher();
+
+        // Do initial state capture
+        this.captureState('State Monitor initialized');
+    }
+
+    /**
+     * Stop monitoring
+     */
+    public stop(): void {
+        console.log('🔍 State Monitor stopped');
+
+        if (this.checkInterval) {
+            clearInterval(this.checkInterval);
+            this.checkInterval = null;
+        }
+
+        if (this.fileWatcher) {
+            this.fileWatcher.dispose();
+            this.fileWatcher = null;
+        }
+    }
+
+    /**
+     * Start periodic state check
+     */
+    private startPeriodicCheck(): void {
+        if (this.checkInterval) {
+            clearInterval(this.checkInterval);
+        }
+
+        this.checkInterval = setInterval(async () => {
+            await this.checkAndCommit();
+        }, this.checkIntervalMs);
+    }
+
+    /**
+     * Start file system watcher
+     */
+    private startFileWatcher(): void {
+        if (this.fileWatcher) {
+            this.fileWatcher.dispose();
+        }
+
+        // Watch all files in workspace
+        this.fileWatcher = vscode.workspace.createFileSystemWatcher('**/*');
+
+        this.fileWatcher.onDidChange((uri) => {
+            if (this.shouldTrackFile(uri)) {
+                this.pendingChanges.add(uri.fsPath);
+                this.scheduleCommit();
+            }
+        });
+
+        this.fileWatcher.onDidCreate((uri) => {
+            if (this.shouldTrackFile(uri)) {
+                this.pendingChanges.add(uri.fsPath);
+                this.scheduleCommit();
+            }
+        });
+
+        this.fileWatcher.onDidDelete((uri) => {
+            if (this.shouldTrackFile(uri)) {
+                this.pendingChanges.add(uri.fsPath);
+                this.scheduleCommit();
+            }
+        });
+    }
+
+    /**
+     * Check if file should be tracked
+     */
+    private shouldTrackFile(uri: vscode.Uri): boolean {
+        const path = uri.fsPath;
+        
+        // Ignore common non-tracked paths
+        const ignoredPatterns = [
+            'node_modules',
+            '.git',
+            'dist',
+            'out',
+            '.vscode',
+            '__pycache__',
+            '.pyc',
+            '.class',
+            '.o',
+            '.obj',
+            'target',
+            'build',
+            '.DS_Store',
+            'Thumbs.db'
+        ];
+
+        for (const pattern of ignoredPatterns) {
+            if (path.includes(pattern)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Schedule a commit after debounce period
+     */
+    private commitTimeout: NodeJS.Timeout | null = null;
+    
+    private scheduleCommit(): void {
+        if (!this.autoCommitEnabled) {
+            return;
+        }
+
+        // Debounce commits
+        if (this.commitTimeout) {
+            clearTimeout(this.commitTimeout);
+        }
+
+        this.commitTimeout = setTimeout(async () => {
+            await this.checkAndCommit();
+        }, 5000); // 5 second debounce
+    }
+
+    /**
+     * Check for changes and commit if needed
+     */
+    private async checkAndCommit(): Promise<void> {
+        if (!this.isEnabled || !this.autoCommitEnabled) {
+            return;
+        }
+
+        // Check minimum time between commits
+        const now = Date.now();
+        if (now - this.lastCommitTime < this.minTimeBetweenCommits) {
+            return;
+        }
+
+        try {
+            // Check if there are uncommitted changes
+            const status = await this.gitManager.getStatus();
+            if (!status) {
+                return;
+            }
+
+            const hasChanges = status.modified.length > 0 || 
+                              status.created.length > 0 || 
+                              status.deleted.length > 0 ||
+                              status.not_added.length > 0;
+
+            if (!hasChanges) {
+                this.pendingChanges.clear();
+                return;
+            }
+
+            // Create auto-commit
+            const timestamp = new Date().toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            const changedFiles = [
+                ...status.modified,
+                ...status.created,
+                ...status.deleted,
+                ...status.not_added
+            ];
+
+            const fileList = changedFiles.slice(0, 3).join(', ');
+            const moreFiles = changedFiles.length > 3 ? ` +${changedFiles.length - 3} more` : '';
+            const message = `[Vibe Guardian] 📸 Auto-save @ ${timestamp} (${fileList}${moreFiles})`;
+
+            const commitHash = await this.gitManager.createCommit([], message);
+            
+            if (commitHash) {
+                this.lastCommitTime = now;
+                this.pendingChanges.clear();
+
+                const snapshot: StateSnapshot = {
+                    id: `state-${now}`,
+                    timestamp: now,
+                    commitHash: commitHash,
+                    message: message,
+                    filesChanged: changedFiles
+                };
+
+                this.stateHistory.push(snapshot);
+                this.saveHistory();
+
+                console.log(`📸 Auto-saved state: ${commitHash.substring(0, 7)}`);
+                this._onStateChanged.fire(snapshot);
+            }
+        } catch (error) {
+            console.error('State monitor check failed:', error);
+        }
+    }
+
+    /**
+     * Manually capture current state
+     */
+    public async captureState(description?: string): Promise<StateSnapshot | undefined> {
+        if (!await this.gitManager.isGitRepository()) {
+            return undefined;
+        }
+
+        try {
+            const status = await this.gitManager.getStatus();
+            if (!status) {
+                return undefined;
+            }
+
+            const changedFiles = [
+                ...status.modified,
+                ...status.created,
+                ...status.deleted,
+                ...status.not_added
+            ];
+
+            // If no changes, still create a marker commit
+            const timestamp = new Date().toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            const message = description 
+                ? `[Vibe Guardian] 📌 ${description} @ ${timestamp}`
+                : `[Vibe Guardian] 📌 Manual save @ ${timestamp}`;
+
+            // Stage all changes if any
+            if (changedFiles.length > 0) {
+                const commitHash = await this.gitManager.createCommit([], message);
+                if (commitHash) {
+                    const now = Date.now();
+                    const snapshot: StateSnapshot = {
+                        id: `state-${now}`,
+                        timestamp: now,
+                        commitHash: commitHash,
+                        message: message,
+                        filesChanged: changedFiles
+                    };
+
+                    this.stateHistory.push(snapshot);
+                    this.saveHistory();
+
+                    return snapshot;
+                }
+            }
+
+            return undefined;
+        } catch (error) {
+            console.error('Failed to capture state:', error);
+            return undefined;
+        }
+    }
+
+    /**
+     * Get all state snapshots from git log
+     */
+    public async getStateHistory(): Promise<StateSnapshot[]> {
+        try {
+            // Get commits from git log that were created by Vibe Guardian
+            const commits = await this.gitManager.getCommitHistory(100);
+            const snapshots: StateSnapshot[] = [];
+
+            for (const commit of commits) {
+                snapshots.push({
+                    id: commit.hash,
+                    timestamp: new Date(commit.date).getTime(),
+                    commitHash: commit.hash,
+                    message: commit.message,
+                    filesChanged: [] // Would need to get from diff
+                });
+            }
+
+            return snapshots;
+        } catch {
+            return this.stateHistory;
+        }
+    }
+
+    /**
+     * Rollback to a specific state/commit
+     */
+    public async rollbackToState(commitHash: string): Promise<{ success: boolean; message: string }> {
+        try {
+            // First, save current state as backup
+            await this.captureState('Backup before rollback');
+
+            // Perform hard reset
+            const success = await this.gitManager.rollbackToCommit(commitHash, true);
+            
+            if (success) {
+                // Refresh all open files
+                await this.refreshAllEditors();
+                
+                return {
+                    success: true,
+                    message: `Successfully rolled back to ${commitHash.substring(0, 7)}`
+                };
+            } else {
+                return {
+                    success: false,
+                    message: 'Git reset failed'
+                };
+            }
+        } catch (error) {
+            return {
+                success: false,
+                message: `Rollback failed: ${error}`
+            };
+        }
+    }
+
+    /**
+     * Rollback to a specific time
+     */
+    public async rollbackToTime(timestamp: number): Promise<{ success: boolean; message: string }> {
+        try {
+            // Find the commit closest to but not after the timestamp
+            const commits = await this.gitManager.getCommitHistory(100);
+            
+            let targetCommit: string | null = null;
+            for (const commit of commits) {
+                const commitTime = new Date(commit.date).getTime();
+                if (commitTime <= timestamp) {
+                    targetCommit = commit.hash;
+                    break;
+                }
+            }
+
+            if (!targetCommit) {
+                return {
+                    success: false,
+                    message: 'No commit found before the specified time'
+                };
+            }
+
+            return await this.rollbackToState(targetCommit);
+        } catch (error) {
+            return {
+                success: false,
+                message: `Rollback failed: ${error}`
+            };
+        }
+    }
+
+    /**
+     * Refresh all open editors to show updated content
+     */
+    private async refreshAllEditors(): Promise<void> {
+        // Revert all open documents to reload from disk
+        for (const doc of vscode.workspace.textDocuments) {
+            if (doc.uri.scheme === 'file' && !doc.isUntitled) {
+                try {
+                    await vscode.commands.executeCommand('workbench.action.files.revert', doc.uri);
+                } catch {
+                    // Ignore errors
+                }
+            }
+        }
+
+        // Refresh file explorer
+        await vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
+    }
+
+    /**
+     * Save history to workspace state
+     */
+    private saveHistory(): void {
+        // Keep only last 100 entries
+        if (this.stateHistory.length > 100) {
+            this.stateHistory = this.stateHistory.slice(-100);
+        }
+    }
+
+    /**
+     * Load history from workspace state
+     */
+    private loadHistory(): void {
+        // History is primarily from git, so we just initialize empty
+        this.stateHistory = [];
+    }
+
+    /**
+     * Enable/disable auto-commit
+     */
+    public setAutoCommit(enabled: boolean): void {
+        this.autoCommitEnabled = enabled;
+        console.log(`Auto-commit ${enabled ? 'enabled' : 'disabled'}`);
+    }
+
+    /**
+     * Set check interval
+     */
+    public setCheckInterval(ms: number): void {
+        this.checkIntervalMs = ms;
+        if (this.checkInterval) {
+            this.startPeriodicCheck();
+        }
+    }
+
+    /**
+     * Get monitoring status
+     */
+    public getStatus(): { enabled: boolean; autoCommit: boolean; interval: number; pendingChanges: number } {
+        return {
+            enabled: this.isEnabled,
+            autoCommit: this.autoCommitEnabled,
+            interval: this.checkIntervalMs,
+            pendingChanges: this.pendingChanges.size
+        };
+    }
+
+    public dispose(): void {
+        this.stop();
+        this._onStateChanged.dispose();
+    }
+}
