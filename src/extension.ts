@@ -401,6 +401,13 @@ function registerCommands(context: vscode.ExtensionContext) {
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
+    // Re-initialize Git when active editor changes to handle multi-root workspaces
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(() => {
+            gitManager.reinitializeForActiveEditor();
+        })
+    );
+
     // Listen for AI edit detection
     aiDetector.onAIEditDetected(async (event) => {
         const settings = checkpointManager.getSettings();
