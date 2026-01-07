@@ -128,6 +128,7 @@ export async function activate(context: vscode.ExtensionContext) {
         // Create status bar items
         createLanguageStatusBar(context);
         createNotificationStatusBar(context);
+        createPushStrategyStatusBar(context);
 
         // Show welcome and auto-start session
         vscode.window.showInformationMessage('🎮 Vibe Code Guardian activated!');
