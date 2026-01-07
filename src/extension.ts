@@ -878,6 +878,21 @@ function registerCommands(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage(`🌐 Commit language changed to: ${displayName}`);
         })
     );
+
+    // Toggle Notification Level
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.toggleNotificationLevel', async () => {
+            const settings = checkpointManager.getSettings();
+            const nextLevel = getNextNotificationLevel(settings.notificationLevel);
+            await checkpointManager.updateSettings({ notificationLevel: nextLevel });
+            
+            // Update status bar
+            updateNotificationStatusBar(nextLevel);
+            
+            const displayName = getNotificationLevelDisplayName(nextLevel);
+            vscode.window.showInformationMessage(`🔔 Notification level changed to: ${displayName}`);
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
