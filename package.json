@@ -4,10 +4,20 @@
   "description": "Game-like checkpoint system for AI-assisted coding - save, load, and rollback your vibe coding sessions",
   "version": "0.1.1",
   "publisher": "vibe-coder",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/aresnasa/vibe-code-guardian"
   },
+  "bugs": {
+    "url": "https://github.com/aresnasa/vibe-code-guardian/issues"
+  },
+  "homepage": "https://github.com/aresnasa/vibe-code-guardian#readme",
   "engines": {
     "vscode": "^1.107.0"
   },
