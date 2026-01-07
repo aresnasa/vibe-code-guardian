@@ -3,7 +3,8 @@
 # Vibe Code Guardian - Complete Test Suite
 # This script tests the plugin's ability to track code changes and rollback
 
-set -e
+# Don't exit on error - we want to continue testing
+set +e
 
 # Colors for output
 RED='\033[0;31m'
