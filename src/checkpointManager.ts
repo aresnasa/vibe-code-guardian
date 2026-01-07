@@ -15,7 +15,8 @@ import {
     ChangedFile,
     FileChangeType,
     DEFAULT_SETTINGS,
-    CommitLanguage
+    CommitLanguage,
+    PushStrategy
 } from './types';
 import { GitManager } from './gitManager';
 import { generateLocalizedCheckpointName } from './languageConfig';
