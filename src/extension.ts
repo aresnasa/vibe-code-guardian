@@ -48,6 +48,7 @@ let treeProvider: TimelineTreeProvider;
 let stateMonitor: StateMonitor;
 let languageStatusBarItem: vscode.StatusBarItem;
 let notificationStatusBarItem: vscode.StatusBarItem;
+let pushStrategyStatusBarItem: vscode.StatusBarItem;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('🎮 Vibe Code Guardian is activating...');
