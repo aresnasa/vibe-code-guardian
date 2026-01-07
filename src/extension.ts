@@ -895,6 +895,21 @@ function registerCommands(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage(`🔔 Notification level changed to: ${displayName}`);
         })
     );
+
+    // Toggle Push Strategy
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.togglePushStrategy', async () => {
+            const settings = checkpointManager.getSettings();
+            const nextStrategy = getNextPushStrategy(settings.pushStrategy);
+            await checkpointManager.updateSettings({ pushStrategy: nextStrategy });
+            
+            // Update status bar
+            updatePushStrategyStatusBar(nextStrategy);
+            
+            const displayName = getPushStrategyDisplayName(nextStrategy);
+            vscode.window.showInformationMessage(`📤 Push strategy changed to: ${displayName}`);
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
