@@ -188,5 +188,6 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
         '.vscode-test/**',
         'out/**',
         'dist/**'
-    ]
+    ],
+    commitLanguage: 'auto'
 };
