@@ -318,6 +318,183 @@ export class CheckpointManager {
     }
 
     /**
+     * Validate checkpoint - check if git commit exists and files are accessible
+     */
+    public async validateCheckpoint(checkpoint: Checkpoint): Promise<{
+        valid: boolean;
+        issues: string[];
+    }> {
+        const issues: string[] = [];
+
+        // Check if git commit exists
+        if (checkpoint.gitCommitHash) {
+            const commitExists = await this.gitManager.commitExists(checkpoint.gitCommitHash);
+            if (!commitExists) {
+                issues.push(`Git commit ${checkpoint.gitCommitHash.substring(0, 7)} not found`);
+            }
+        }
+
+        // Check if referenced files exist in git history or filesystem
+        for (const file of checkpoint.changedFiles) {
+            const fileExists = await this.checkFileAccessible(file.path, checkpoint.gitCommitHash);
+            if (!fileExists) {
+                issues.push(`File ${file.path} not accessible`);
+            }
+        }
+
+        return {
+            valid: issues.length === 0,
+            issues
+        };
+    }
+
+    /**
+     * Check if a file is accessible (exists in git or filesystem)
+     */
+    private async checkFileAccessible(filePath: string, commitHash?: string): Promise<boolean> {
+        // Check filesystem first
+        try {
+            await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
+            return true;
+        } catch {
+            // File not in filesystem, check git if we have a commit
+        }
+
+        // Check in git history
+        if (commitHash) {
+            const content = await this.gitManager.getFileAtCommit(filePath, commitHash);
+            if (content !== undefined) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Cleanup invalid checkpoints - remove checkpoints with missing git commits or inaccessible files
+     */
+    public async cleanupInvalidCheckpoints(): Promise<{
+        removed: number;
+        details: string[];
+    }> {
+        const removed: string[] = [];
+        const details: string[] = [];
+
+        for (const checkpoint of [...this.storageData.checkpoints]) {
+            const validation = await this.validateCheckpoint(checkpoint);
+            if (!validation.valid) {
+                details.push(`Removing "${checkpoint.name}": ${validation.issues.join(', ')}`);
+                await this.deleteCheckpoint(checkpoint.id);
+                removed.push(checkpoint.id);
+            }
+        }
+
+        return {
+            removed: removed.length,
+            details
+        };
+    }
+
+    /**
+     * Sync checkpoints with Git - rebuild checkpoint list from git history
+     */
+    public async syncWithGit(): Promise<{
+        synced: number;
+        added: number;
+        removed: number;
+    }> {
+        let added = 0;
+        let removed = 0;
+
+        // Get git commits that look like Vibe Guardian checkpoints
+        const gitCommits = await this.gitManager.getVibeGuardianCommits();
+        
+        // Create a map of existing checkpoints by git hash
+        const existingByHash = new Map<string, Checkpoint>();
+        for (const cp of this.storageData.checkpoints) {
+            if (cp.gitCommitHash) {
+                existingByHash.set(cp.gitCommitHash, cp);
+            }
+        }
+
+        // Add missing checkpoints from git
+        for (const commit of gitCommits) {
+            if (!existingByHash.has(commit.hash)) {
+                // Create checkpoint from git commit
+                const checkpoint: Checkpoint = {
+                    id: this.generateId(),
+                    name: commit.message.replace('[Vibe Guardian] ', ''),
+                    timestamp: new Date(commit.date).getTime(),
+                    gitCommitHash: commit.hash,
+                    type: this.inferTypeFromMessage(commit.message),
+                    source: this.inferSourceFromMessage(commit.message),
+                    changedFiles: [],
+                    sessionId: this.storageData.activeSessionId || 'synced',
+                    tags: ['synced-from-git'],
+                    starred: false
+                };
+                this.storageData.checkpoints.push(checkpoint);
+                added++;
+            }
+        }
+
+        // Remove checkpoints whose git commits no longer exist
+        const gitHashSet = new Set(gitCommits.map(c => c.hash));
+        const toRemove: string[] = [];
+        for (const cp of this.storageData.checkpoints) {
+            if (cp.gitCommitHash && !gitHashSet.has(cp.gitCommitHash)) {
+                toRemove.push(cp.id);
+            }
+        }
+
+        for (const id of toRemove) {
+            await this.deleteCheckpoint(id);
+            removed++;
+        }
+
+        await this.saveStorageData();
+
+        return {
+            synced: gitCommits.length,
+            added,
+            removed
+        };
+    }
+
+    /**
+     * Infer checkpoint type from commit message
+     */
+    private inferTypeFromMessage(message: string): CheckpointType {
+        if (message.includes('AutoSave') || message.includes('⏰')) {
+            return CheckpointType.Auto;
+        }
+        if (message.includes('Manual') || message.includes('💾')) {
+            return CheckpointType.Manual;
+        }
+        return CheckpointType.AIEdit;
+    }
+
+    /**
+     * Infer checkpoint source from commit message
+     */
+    private inferSourceFromMessage(message: string): CheckpointSource {
+        if (message.includes('Copilot') || message.includes('🤖')) {
+            return CheckpointSource.Copilot;
+        }
+        if (message.includes('Cursor')) {
+            return CheckpointSource.Cursor;
+        }
+        if (message.includes('AutoSave') || message.includes('⏰')) {
+            return CheckpointSource.AutoSave;
+        }
+        if (message.includes('Manual') || message.includes('💾')) {
+            return CheckpointSource.User;
+        }
+        return CheckpointSource.Unknown;
+    }
+
+    /**
      * Start a new coding session
      */
     public async startSession(name?: string): Promise<CodingSession> {
