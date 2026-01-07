@@ -387,33 +387,45 @@ export class CheckpointManager {
     }
 
     /**
-     * Validate checkpoint - check if git commit exists and files are accessible
+     * Validate checkpoint - check if git commit exists (files are secondary)
+     * For rollback purposes, only the Git commit hash is essential
      */
     public async validateCheckpoint(checkpoint: Checkpoint): Promise<{
         valid: boolean;
         issues: string[];
+        canRollback: boolean; // Can still rollback even if some files are inaccessible
     }> {
         const issues: string[] = [];
+        let canRollback = true;
 
-        // Check if git commit exists
+        // Check if git commit exists - this is the primary validation
         if (checkpoint.gitCommitHash) {
             const commitExists = await this.gitManager.commitExists(checkpoint.gitCommitHash);
             if (!commitExists) {
                 issues.push(`Git commit ${checkpoint.gitCommitHash.substring(0, 7)} not found`);
+                canRollback = false; // Cannot rollback without valid commit
+            }
+        } else {
+            // No git commit - check if we have file content stored
+            const hasStoredContent = checkpoint.changedFiles.some(f => f.previousContent !== undefined);
+            if (!hasStoredContent) {
+                issues.push('No Git commit and no stored file content');
+                canRollback = false;
             }
         }
 
-        // Check if referenced files exist in git history or filesystem
+        // File accessibility is informational only - doesn't prevent rollback if we have git commit
         for (const file of checkpoint.changedFiles) {
             const fileExists = await this.checkFileAccessible(file.path, checkpoint.gitCommitHash);
             if (!fileExists) {
-                issues.push(`File ${file.path} not accessible`);
+                issues.push(`File ${file.path} not in current state (ok for rollback)`);
             }
         }
 
         return {
             valid: issues.length === 0,
-            issues
+            issues,
+            canRollback
         };
     }
 
