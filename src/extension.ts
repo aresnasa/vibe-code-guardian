@@ -896,7 +896,7 @@ function setupEventListeners(context: vscode.ExtensionContext) {
                 event.changedFiles,
                 { description: `AI-detected changes (${event.source})` }
             );
-            if (checkpoint && settings.showNotifications) {
+            if (checkpoint && shouldShowNotification(settings.notificationLevel, CheckpointType.AIGenerated)) {
                 vscode.window.showInformationMessage(`🤖 AI checkpoint: ${checkpoint.name}`);
             }
             treeProvider.refresh();
@@ -935,15 +935,15 @@ function setupEventListeners(context: vscode.ExtensionContext) {
                     { description }
                 );
                 
-                if (checkpoint && settings.showNotifications) {
+                if (checkpoint && shouldShowNotification(settings.notificationLevel, checkpoint.type)) {
                     vscode.window.showInformationMessage(`💾 User checkpoint: ${checkpoint.name}`);
                 }
                 treeProvider.refresh();
             }
         }
         
-        // Notify for new files
-        if (event.isNewFile && settings.showNotifications) {
+        // Notify for new files (only in 'all' mode)
+        if (event.isNewFile && settings.notificationLevel === 'all') {
             const fileNames = event.changedFiles.map(f => f.path.split('/').pop()).join(', ');
             console.log(`📁 New file created: ${fileNames}`);
         }
