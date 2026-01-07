@@ -696,6 +696,80 @@ Thumbs.db
     }
 
     /**
+     * Check if remote origin exists
+     */
+    public async hasRemote(remoteName: string = 'origin'): Promise<boolean> {
+        if (!this.git) {
+            return false;
+        }
+        try {
+            const remotes = await this.git.getRemotes(true);
+            return remotes.some(r => r.name === remoteName);
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Get current branch name
+     */
+    public async getCurrentBranch(): Promise<string | undefined> {
+        if (!this.git) {
+            return undefined;
+        }
+        try {
+            const status = await this.git.status();
+            return status.current || undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Push commits to remote repository
+     * @param remoteName Remote name (default: 'origin')
+     * @param branchName Branch to push (default: current branch)
+     * @param force Whether to force push
+     * @returns Object with success status and message
+     */
+    public async pushToRemote(
+        remoteName: string = 'origin',
+        branchName?: string,
+        force: boolean = false
+    ): Promise<{ success: boolean; message: string }> {
+        if (!this.git) {
+            return { success: false, message: 'Git not initialized' };
+        }
+
+        try {
+            // Check if remote exists
+            const hasRemoteRepo = await this.hasRemote(remoteName);
+            if (!hasRemoteRepo) {
+                return { success: false, message: `Remote '${remoteName}' not found` };
+            }
+
+            // Get current branch if not specified
+            const branch = branchName || await this.getCurrentBranch();
+            if (!branch) {
+                return { success: false, message: 'Could not determine current branch' };
+            }
+
+            // Push to remote
+            const options = force ? ['--force'] : [];
+            await this.git.push(remoteName, branch, options);
+            
+            return { 
+                success: true, 
+                message: `Successfully pushed to ${remoteName}/${branch}` 
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Git push failed:', errorMessage);
+            return { success: false, message: `Push failed: ${errorMessage}` };
+        }
+    }
+
+    /**
      * Get list of changed files
      */
     public async getChangedFiles(): Promise<string[]> {
