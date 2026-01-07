@@ -338,101 +338,82 @@ export class RollbackManager {
 
         // Use Git rollback if we have a commit hash
         if (checkpoint.gitCommitHash && await this.gitManager.isGitRepository()) {
-            // If no specific files, restore all files from that commit
-            if (checkpoint.changedFiles.length === 0) {
-                // Ask user for rollback method
-                const method = await vscode.window.showQuickPick(
-                    [
-                        {
-                            label: '$(file-symlink-file) Restore Files',
-                            description: 'Restore file contents to checkpoint state (safest)',
-                            value: 'restore'
-                        },
-                        {
-                            label: '$(git-commit) Soft Reset',
-                            description: 'Move HEAD to checkpoint, keep changes staged',
-                            value: 'soft'
-                        },
-                        {
-                            label: '$(warning) Hard Reset',
-                            description: 'Discard all changes after checkpoint (destructive!)',
-                            value: 'hard'
-                        }
-                    ],
+            console.log(`Attempting Git rollback to commit: ${checkpoint.gitCommitHash}`);
+            
+            // Always show method selection for clarity
+            const method = await vscode.window.showQuickPick(
+                [
                     {
-                        placeHolder: 'Choose rollback method',
-                        title: `Rollback to: ${checkpoint.name}`
+                        label: '$(history) Hard Reset (Recommended)',
+                        description: 'Reset to checkpoint state, discard all changes after it',
+                        value: 'hard'
+                    },
+                    {
+                        label: '$(git-commit) Soft Reset',
+                        description: 'Move HEAD to checkpoint, keep changes staged',
+                        value: 'soft'
+                    },
+                    {
+                        label: '$(file-symlink-file) Checkout Files Only',
+                        description: 'Restore file contents without moving HEAD',
+                        value: 'checkout'
                     }
-                );
+                ],
+                {
+                    placeHolder: 'Choose rollback method',
+                    title: `Rollback to: ${checkpoint.name}`
+                }
+            );
 
-                if (!method) {
+            if (!method) {
+                return {
+                    success: false,
+                    message: 'Rollback cancelled',
+                    filesRestored: [],
+                    filesNotRestored: [],
+                    errors: []
+                };
+            }
+
+            try {
+                let success = false;
+                let restoredFiles: string[] = [];
+
+                if (method.value === 'hard') {
+                    // Hard reset - most reliable
+                    success = await this.gitManager.rollbackToCommit(checkpoint.gitCommitHash, true);
+                    restoredFiles = ['All files (hard reset)'];
+                } else if (method.value === 'soft') {
+                    // Soft reset
+                    success = await this.gitManager.rollbackToCommit(checkpoint.gitCommitHash, false);
+                    restoredFiles = ['All files (soft reset)'];
+                } else {
+                    // Checkout files only
+                    const result = await this.gitManager.restoreToCommit(checkpoint.gitCommitHash);
+                    success = result.success;
+                    restoredFiles = result.restoredFiles;
+                    if (result.errors.length > 0) {
+                        errors.push(...result.errors);
+                    }
+                }
+
+                if (success) {
+                    // Refresh all open files in VS Code
+                    await this.refreshAllOpenFiles();
+                    
                     return {
-                        success: false,
-                        message: 'Rollback cancelled',
-                        filesRestored: [],
+                        success: true,
+                        message: `Successfully rolled back to: ${checkpoint.name}`,
+                        filesRestored: restoredFiles,
                         filesNotRestored: [],
                         errors: []
                     };
+                } else {
+                    errors.push('Git operation returned false');
                 }
-
-                try {
-                    if (method.value === 'restore') {
-                        const result = await this.gitManager.restoreToCommit(checkpoint.gitCommitHash);
-                        if (result.success) {
-                            // Refresh files in VS Code editor
-                            await this.refreshFilesInEditor(result.restoredFiles);
-                            return {
-                                success: true,
-                                message: `Restored ${result.restoredFiles.length} files to checkpoint: ${checkpoint.name}`,
-                                filesRestored: result.restoredFiles,
-                                filesNotRestored: [],
-                                errors: result.errors
-                            };
-                        } else {
-                            errors.push(...result.errors);
-                        }
-                    } else {
-                        const hard = method.value === 'hard';
-                        const success = await this.gitManager.rollbackToCommit(
-                            checkpoint.gitCommitHash,
-                            hard
-                        );
-                        if (success) {
-                            // Refresh all open files after reset
-                            await this.refreshAllOpenFiles();
-                            return {
-                                success: true,
-                                message: `${hard ? 'Hard' : 'Soft'} reset to checkpoint: ${checkpoint.name}`,
-                                filesRestored: ['All files'],
-                                filesNotRestored: [],
-                                errors: []
-                            };
-                        }
-                    }
-                } catch (error) {
-                    errors.push(`Git rollback failed: ${error}`);
-                }
-            } else {
-                // We have specific files to restore
-                try {
-                    const success = await this.gitManager.rollbackToCommit(
-                        checkpoint.gitCommitHash,
-                        options?.hard ?? false
-                    );
-                    if (success) {
-                        // Refresh the specific files that were restored
-                        await this.refreshFilesInEditor(checkpoint.changedFiles.map(f => f.path));
-                        return {
-                            success: true,
-                            message: `Rolled back to checkpoint: ${checkpoint.name}`,
-                            filesRestored: checkpoint.changedFiles.map(f => f.path),
-                            filesNotRestored: [],
-                            errors: []
-                        };
-                    }
-                } catch (error) {
-                    errors.push(`Git rollback failed: ${error}`);
-                }
+            } catch (error) {
+                console.error('Git rollback error:', error);
+                errors.push(`Git rollback failed: ${error}`);
             }
         }
 
