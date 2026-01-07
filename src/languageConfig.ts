@@ -180,3 +180,35 @@ export function getNextLanguage(current: CommitLanguage): CommitLanguage {
             return 'auto';
     }
 }
+
+/**
+ * Gets the display name for the notification level
+ * @param level Notification level
+ * @returns Display name with icon
+ */
+export function getNotificationLevelDisplayName(level: NotificationLevel): string {
+    switch (level) {
+        case 'all':
+            return '🔔 All';
+        case 'milestone':
+            return '🔕 Milestone Only';
+        case 'none':
+            return '🔇 Silent';
+    }
+}
+
+/**
+ * Gets the next notification level in the cycle: milestone -> all -> none -> milestone
+ * @param current Current notification level
+ * @returns Next notification level
+ */
+export function getNextNotificationLevel(current: NotificationLevel): NotificationLevel {
+    switch (current) {
+        case 'milestone':
+            return 'all';
+        case 'all':
+            return 'none';
+        case 'none':
+            return 'milestone';
+    }
+}
