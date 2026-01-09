@@ -45,7 +45,11 @@ export class CheckpointManager {
     private loadStorageData(): CheckpointStorageData {
         const data = this.context.workspaceState.get<CheckpointStorageData>('vibeCodeGuardian.data');
         if (data && data.version === 1) {
-            return data;
+            // Merge with DEFAULT_SETTINGS to ensure new settings fields have default values
+            return {
+                ...data,
+                settings: { ...DEFAULT_SETTINGS, ...data.settings }
+            };
         }
         return {
             version: 1,

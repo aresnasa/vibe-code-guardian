@@ -162,6 +162,10 @@ export function getLanguageDisplayName(commitLanguage: CommitLanguage): string {
         case 'auto':
             const detected = detectVSCodeLanguage();
             return detected === 'zh' ? '🔄 自动 (中文)' : '🔄 Auto (English)';
+        default:
+            // Handle undefined or invalid values by defaulting to 'auto'
+            const defaultDetected = detectVSCodeLanguage();
+            return defaultDetected === 'zh' ? '🔄 自动 (中文)' : '🔄 Auto (English)';
     }
 }
 
@@ -178,6 +182,9 @@ export function getNextLanguage(current: CommitLanguage): CommitLanguage {
             return 'zh';
         case 'zh':
             return 'auto';
+        default:
+            // Handle undefined or invalid values by defaulting to 'auto' -> 'en'
+            return 'en';
     }
 }
 
