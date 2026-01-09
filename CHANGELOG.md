@@ -6,4 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.1.2]
+- Fix marketplace publishing issues
+- General improvements
+
 - Initial release
