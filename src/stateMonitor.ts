@@ -150,8 +150,6 @@ export class StateMonitor {
     /**
      * Schedule a commit after debounce period
      */
-    private commitTimeout: NodeJS.Timeout | null = null;
-    
     private scheduleCommit(): void {
         if (!this.autoCommitEnabled) {
             return;
