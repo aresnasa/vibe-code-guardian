@@ -16,7 +16,7 @@ export interface StateSnapshot {
 
 export class StateMonitor {
     private gitManager: GitManager;
-    private checkInterval: NodeJS.Timeout | null = null;
+    private commitTimeout: NodeJS.Timeout | null = null;
     private fileWatcher: vscode.FileSystemWatcher | null = null;
     private pendingChanges: Set<string> = new Set();
     private lastCommitTime: number = 0;
@@ -507,11 +507,11 @@ export class StateMonitor {
     /**
      * Get monitoring status
      */
-    public getStatus(): { enabled: boolean; autoCommit: boolean; interval: number; pendingChanges: number } {
+    public getStatus(): { enabled: boolean; autoCommit: boolean; debounceMs: number; pendingChanges: number } {
         return {
             enabled: this.isEnabled,
             autoCommit: this.autoCommitEnabled,
-            interval: this.checkIntervalMs,
+            debounceMs: this.commitDebounceMs,
             pendingChanges: this.pendingChanges.size
         };
     }
