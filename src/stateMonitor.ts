@@ -24,8 +24,8 @@ export class StateMonitor {
     private stateHistory: StateSnapshot[] = [];
     
     // Configuration
-    private checkIntervalMs: number = 30000; // 30 seconds
-    private minTimeBetweenCommits: number = 10000; // 10 seconds
+    private minTimeBetweenCommits: number = 10000; // 10 seconds minimum between auto-commits
+    private commitDebounceMs: number = 5000; // 5 seconds debounce for file changes
     private autoCommitEnabled: boolean = true;
 
     private _onStateChanged = new vscode.EventEmitter<StateSnapshot>();
@@ -44,12 +44,9 @@ export class StateMonitor {
             return;
         }
 
-        console.log('🔍 State Monitor started');
+        console.log('🔍 State Monitor started (trigger-based auto-save)');
 
-        // Start periodic check
-        this.startPeriodicCheck();
-
-        // Watch for file changes
+        // Watch for file changes - only save when files actually change
         this.startFileWatcher();
 
         // Do initial state capture
@@ -62,9 +59,9 @@ export class StateMonitor {
     public stop(): void {
         console.log('🔍 State Monitor stopped');
 
-        if (this.checkInterval) {
-            clearInterval(this.checkInterval);
-            this.checkInterval = null;
+        if (this.commitTimeout) {
+            clearTimeout(this.commitTimeout);
+            this.commitTimeout = null;
         }
 
         if (this.fileWatcher) {
@@ -76,15 +73,13 @@ export class StateMonitor {
     /**
      * Start periodic state check
      */
-    private startPeriodicCheck(): void {
-        if (this.checkInterval) {
-            clearInterval(this.checkInterval);
-        }
-
-        this.checkInterval = setInterval(async () => {
-            await this.checkAndCommit();
-        }, this.checkIntervalMs);
-    }
+    /**
+     * Auto-save is now trigger-based:
+     * - File changes are detected by FileSystemWatcher
+     * - Changes are debounced (5 seconds) to batch rapid edits
+     * - Only commits when there are actual Git changes
+     * - Minimum time between commits is enforced (10 seconds)
+     */
 
     /**
      * Start file system watcher
@@ -162,14 +157,14 @@ export class StateMonitor {
             return;
         }
 
-        // Debounce commits
+        // Debounce commits - wait for file changes to settle
         if (this.commitTimeout) {
             clearTimeout(this.commitTimeout);
         }
 
         this.commitTimeout = setTimeout(async () => {
             await this.checkAndCommit();
-        }, 5000); // 5 second debounce
+        }, this.commitDebounceMs);
     }
 
     /**
