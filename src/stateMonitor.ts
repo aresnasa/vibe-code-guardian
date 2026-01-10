@@ -495,11 +495,13 @@ export class StateMonitor {
     /**
      * Set check interval
      */
-    public setCheckInterval(ms: number): void {
-        this.checkIntervalMs = ms;
-        if (this.checkInterval) {
-            this.startPeriodicCheck();
-        }
+    /**
+     * @deprecated This method is kept for API compatibility.
+     * Auto-save is now trigger-based, not interval-based.
+     * Use setCommitDebounce() instead to control debounce timing.
+     */
+    public setCheckInterval(_ms: number): void {
+        console.log('⚠️ setCheckInterval is deprecated. Auto-save is now trigger-based.');
     }
 
     /**
