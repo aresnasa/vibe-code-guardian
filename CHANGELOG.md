@@ -9,8 +9,15 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [0.1.6]
 
 ### Added
-- Automatic build script (`scripts/build.sh`) for compiling the project
-- Build script includes type checking, linting, and bundling steps
+- **Enhanced build script** (`scripts/build.sh`) with multiple modes:
+  - `build` - Compile and verify the project (default)
+  - `package` - Build and create .vsix package
+  - `publish` - Build, package, publish to Marketplace, and push to GitHub
+  - `full` - Full release with automated version bumping
+- Automatic version bumping in package.json (patch, minor, major)
+- Git integration for automatic commits, tagging, and pushing
+- Colored output for better readability
+- Version management utilities
 
 ### Changed
 - Bumped version to 0.1.6
