@@ -6,7 +6,14 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.1.6]
+
+### Added
+- Automatic build script (`scripts/build.sh`) for compiling the project
+- Build script includes type checking, linting, and bundling steps
+
 ### Changed
+- Bumped version to 0.1.6
 - Automatically create comprehensive .gitignore when initializing Git repository
 - Enhanced .gitignore with common patterns for all project types including:
   - Cache directories and temporary files
