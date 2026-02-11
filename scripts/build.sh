@@ -231,7 +231,7 @@ case "$MODE" in
     full)
         # Full release with version bump
         log_warning "Bumping $VERSION_BUMP version..."
-        local new_version=$(bump_version "$VERSION_BUMP")
+        new_version=$(bump_version "$VERSION_BUMP")
         log_success "Version updated to $new_version"
         
         do_build
