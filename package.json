@@ -359,6 +359,13 @@
             "All - Push all commits to remote"
           ],
           "description": "Control when to push commits to remote: 'none' (never), 'milestone' (manual checkpoints only), 'all' (every commit)"
+        },
+        "vibeCodeGuardian.maxFileSizeKB": {
+          "type": "number",
+          "default": 512,
+          "minimum": 64,
+          "maximum": 10240,
+          "description": "Maximum file size in KB to track in Git. Files larger than this are automatically skipped (default: 512KB)"
         }
       }
     }
