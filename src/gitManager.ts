@@ -923,8 +923,9 @@ public/bundles/
     /**
      * Get detailed changed files info from Git status
      * This synchronizes with actual Git state before saving checkpoints
+     * Large files are automatically filtered out
      */
-    public async getDetailedChangedFiles(): Promise<Array<{
+    public async getDetailedChangedFiles(maxFileSize?: number): Promise<Array<{
         path: string;
         changeType: 'added' | 'modified' | 'deleted' | 'renamed';
         staged: boolean;
@@ -942,36 +943,42 @@ public/bundles/
 
             // Modified files
             for (const file of status.modified) {
-                files.push({ path: file, changeType: 'modified', staged: false });
+                if (!this.isLargeFile(file, maxFileSize)) {
+                    files.push({ path: file, changeType: 'modified', staged: false });
+                }
             }
 
             // Staged modified files
             for (const file of status.staged) {
-                if (!files.find(f => f.path === file)) {
+                if (!files.find(f => f.path === file) && !this.isLargeFile(file, maxFileSize)) {
                     files.push({ path: file, changeType: 'modified', staged: true });
                 }
             }
 
             // Created/new files
             for (const file of status.created) {
-                files.push({ path: file, changeType: 'added', staged: true });
+                if (!this.isLargeFile(file, maxFileSize)) {
+                    files.push({ path: file, changeType: 'added', staged: true });
+                }
             }
 
             // Untracked files (not yet added)
             for (const file of status.not_added) {
-                if (!files.find(f => f.path === file)) {
+                if (!files.find(f => f.path === file) && !this.isLargeFile(file, maxFileSize)) {
                     files.push({ path: file, changeType: 'added', staged: false });
                 }
             }
 
-            // Deleted files
+            // Deleted files (no need to check size for deleted files)
             for (const file of status.deleted) {
                 files.push({ path: file, changeType: 'deleted', staged: false });
             }
 
             // Renamed files
             for (const renamed of status.renamed) {
-                files.push({ path: renamed.to, changeType: 'renamed', staged: true });
+                if (!this.isLargeFile(renamed.to, maxFileSize)) {
+                    files.push({ path: renamed.to, changeType: 'renamed', staged: true });
+                }
             }
 
             return files;
