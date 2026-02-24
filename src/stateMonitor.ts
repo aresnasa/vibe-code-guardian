@@ -231,11 +231,22 @@ export class StateMonitor {
                 ...status.not_added
             ];
 
-            const fileList = changedFiles.slice(0, 3).join(', ');
-            const moreFiles = changedFiles.length > 3 ? ` +${changedFiles.length - 3} more` : '';
+            // Filter out large files from the changed list
+            const { kept: trackedFiles, skipped } = this.gitManager.filterLargeFiles(changedFiles);
+            if (skipped.length > 0) {
+                console.log(`⏭️  State Monitor: Skipped ${skipped.length} large file(s): ${skipped.join(', ')}`);
+            }
+
+            if (trackedFiles.length === 0) {
+                this.pendingChanges.clear();
+                return;
+            }
+
+            const fileList = trackedFiles.slice(0, 3).join(', ');
+            const moreFiles = trackedFiles.length > 3 ? ` +${trackedFiles.length - 3} more` : '';
             const message = `[Vibe Guardian] 📸 Auto-save @ ${timestamp} (${fileList}${moreFiles})`;
 
-            const commitHash = await this.gitManager.createCommit([], message);
+            const commitHash = await this.gitManager.createCommit(trackedFiles, message);
             
             if (commitHash) {
                 this.lastCommitTime = now;
