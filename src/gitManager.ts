@@ -8,7 +8,7 @@ import { simpleGit, SimpleGit, StatusResult } from 'simple-git';
 import * as path from 'path';
 import * as fs from 'fs';
 import { execSync } from 'child_process';
-import { DiffInfo, DiffHunk } from './types';
+import { DiffInfo, DiffHunk, DEFAULT_SETTINGS } from './types';
 
 /**
  * Project type detection result
@@ -1006,24 +1006,43 @@ public/bundles/
     /**
      * Stage all changes and create commit - returns actual changed files
      */
-    public async stageAndCommitAll(message: string): Promise<{
+    public async stageAndCommitAll(message: string, maxFileSize?: number): Promise<{
         success: boolean;
         commitHash?: string;
         changedFiles: string[];
+        skippedLargeFiles: string[];
     }> {
         if (!this.git) {
-            return { success: false, changedFiles: [] };
+            return { success: false, changedFiles: [], skippedLargeFiles: [] };
         }
         try {
             // Get changed files BEFORE staging
             const changedFiles = await this.getChangedFiles();
             
             if (changedFiles.length === 0) {
-                return { success: false, changedFiles: [] };
+                return { success: false, changedFiles: [], skippedLargeFiles: [] };
             }
 
-            // Stage all
-            await this.git.add('.');
+            // Filter out large files
+            const { kept, skipped } = this.filterLargeFiles(changedFiles, maxFileSize);
+            
+            if (skipped.length > 0) {
+                console.log(`⏭️  Skipped ${skipped.length} large file(s) from commit: ${skipped.join(', ')}`);
+            }
+
+            if (kept.length === 0) {
+                console.log('No files to commit after filtering large files');
+                return { success: false, changedFiles: [], skippedLargeFiles: skipped };
+            }
+
+            // Stage only non-large files (use relative paths)
+            const relativePaths = kept.map(f => {
+                if (path.isAbsolute(f) && this.workspaceRoot) {
+                    return path.relative(this.workspaceRoot, f);
+                }
+                return f;
+            });
+            await this.git.add(relativePaths);
             
             // Commit
             const result = await this.git.commit(message);
@@ -1031,11 +1050,12 @@ public/bundles/
             return {
                 success: true,
                 commitHash: result.commit,
-                changedFiles
+                changedFiles: kept,
+                skippedLargeFiles: skipped
             };
         } catch (error) {
             console.error('Failed to stage and commit:', error);
-            return { success: false, changedFiles: [] };
+            return { success: false, changedFiles: [], skippedLargeFiles: [] };
         }
     }
 
@@ -1505,6 +1525,46 @@ public/bundles/
             console.error('Failed to create branch:', error);
             return false;
         }
+    }
+
+    /**
+     * Check if a file exceeds the maximum allowed size for tracking
+     * @param filePath Absolute or relative path to the file
+     * @param maxSize Maximum size in bytes (default from DEFAULT_SETTINGS)
+     * @returns true if the file is too large to track
+     */
+    public isLargeFile(filePath: string, maxSize?: number): boolean {
+        const limit = maxSize ?? DEFAULT_SETTINGS.maxFileSize;
+        try {
+            const absPath = path.isAbsolute(filePath)
+                ? filePath
+                : path.join(this.workspaceRoot || '', filePath);
+            const stat = fs.statSync(absPath);
+            return stat.size > limit;
+        } catch {
+            // File doesn't exist or can't be read, don't treat as large
+            return false;
+        }
+    }
+
+    /**
+     * Filter out large files from a list of file paths
+     * @param files Array of file paths (absolute or relative)
+     * @param maxSize Maximum file size in bytes
+     * @returns Filtered array with large files removed
+     */
+    public filterLargeFiles(files: string[], maxSize?: number): { kept: string[]; skipped: string[] } {
+        const kept: string[] = [];
+        const skipped: string[] = [];
+        for (const file of files) {
+            if (this.isLargeFile(file, maxSize)) {
+                skipped.push(file);
+                console.log(`⏭️  Skipping large file: ${file}`);
+            } else {
+                kept.push(file);
+            }
+        }
+        return { kept, skipped };
     }
 
     public dispose(): void {

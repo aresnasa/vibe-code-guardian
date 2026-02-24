@@ -434,9 +434,33 @@ export class AIDetector {
             '.vscode-test',
             'out',
             'dist',
-            '.vscodeignore'
+            '.vscodeignore',
+            '.vsix',
+            '.pkl',
+            '.pickle',
+            'package-lock.json',
+            'yarn.lock',
+            'pnpm-lock.yaml',
+            '.serena/cache'
         ];
-        return ignoredPatterns.some(pattern => fsPath.includes(pattern));
+        if (ignoredPatterns.some(pattern => fsPath.includes(pattern))) {
+            return true;
+        }
+
+        // Skip large files
+        try {
+            const fs = require('fs');
+            const stat = fs.statSync(fsPath);
+            const maxFileSize = 512 * 1024; // 512KB
+            if (stat.size > maxFileSize) {
+                console.log(`⏭️  AI Detector: Skipping large file (${(stat.size / 1024).toFixed(0)}KB): ${fsPath}`);
+                return true;
+            }
+        } catch {
+            // File might not exist
+        }
+
+        return false;
     }
 
     /**

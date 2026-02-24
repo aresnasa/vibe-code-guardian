@@ -118,7 +118,7 @@ export class StateMonitor {
      * Check if file should be tracked
      */
     private shouldTrackFile(uri: vscode.Uri): boolean {
-        const path = uri.fsPath;
+        const filePath = uri.fsPath;
         
         // Ignore common non-tracked paths
         const ignoredPatterns = [
@@ -135,13 +135,33 @@ export class StateMonitor {
             'target',
             'build',
             '.DS_Store',
-            'Thumbs.db'
+            'Thumbs.db',
+            '.vsix',
+            '.pkl',
+            '.pickle',
+            'package-lock.json',
+            'yarn.lock',
+            'pnpm-lock.yaml',
+            '.serena/cache'
         ];
 
         for (const pattern of ignoredPatterns) {
-            if (path.includes(pattern)) {
+            if (filePath.includes(pattern)) {
                 return false;
             }
+        }
+
+        // Skip large files (> 512KB by default)
+        try {
+            const fs = require('fs');
+            const stat = fs.statSync(filePath);
+            const maxFileSize = 512 * 1024; // 512KB
+            if (stat.size > maxFileSize) {
+                console.log(`⏭️  State Monitor: Skipping large file (${(stat.size / 1024).toFixed(0)}KB): ${filePath}`);
+                return false;
+            }
+        } catch {
+            // File might not exist yet (creation event), allow tracking
         }
 
         return true;

@@ -152,6 +152,8 @@ export interface GuardianSettings {
     namingPattern: string;
     /** Files/patterns to ignore */
     ignorePatterns: string[];
+    /** Maximum file size in bytes to track (files larger than this are skipped). Default 512KB */
+    maxFileSize: number;
     /** Commit message language: 'en', 'zh', or 'auto' (detect from VS Code) */
     commitLanguage: CommitLanguage;
     /** Push strategy: 'none' = never push, 'milestone' = only manual checkpoints, 'all' = push all commits */
@@ -198,8 +200,21 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
         '*.log',
         '.vscode-test/**',
         'out/**',
-        'dist/**'
+        'dist/**',
+        '*.vsix',
+        '*.zip',
+        '*.tar.gz',
+        '*.tgz',
+        '*.rar',
+        '*.7z',
+        '*.pkl',
+        '*.pickle',
+        'package-lock.json',
+        'yarn.lock',
+        'pnpm-lock.yaml',
+        '.serena/cache/**'
     ],
+    maxFileSize: 512 * 1024, // 512KB
     commitLanguage: 'auto',
     pushStrategy: 'milestone' // Only push milestone checkpoints to remote
 };
