@@ -3,3 +3,63 @@ dist
 node_modules
 .vscode-test/
 *.vsix
+
+# Large files and binaries
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.jar
+*.war
+*.ear
+*.dll
+*.dylib
+*.so
+*.exe
+*.bin
+*.dmg
+*.iso
+*.img
+*.pdf
+*.ai
+*.psd
+
+# Package lock files (large)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Cache files
+.serena/cache/
+.cache/
+*.pkl
+*.pickle
+
+# Media files (potentially large)
+*.mp4
+*.mp3
+*.avi
+*.mov
+*.mkv
+*.wav
+*.flac
+*.ogg
+
+# Large image files
+*.psd
+*.ai
+*.bmp
+*.tiff
+*.tif
+*.raw
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+
+# OS generated
+.DS_Store
+Thumbs.db
