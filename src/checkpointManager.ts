@@ -158,10 +158,15 @@ export class CheckpointManager {
                     actualChangedFiles = await this.syncChangedFilesWithGit(changedFiles, gitChangedFiles);
                 }
 
-                // Stage all and commit
+                // Stage and commit, filtering large files
                 const commitMessage = `[Vibe Guardian] ${name}`;
-                const commitResult = await this.gitManager.stageAndCommitAll(commitMessage);
+                const maxFileSize = this.storageData.settings.maxFileSize;
+                const commitResult = await this.gitManager.stageAndCommitAll(commitMessage, maxFileSize);
                 
+                if (commitResult.skippedLargeFiles && commitResult.skippedLargeFiles.length > 0) {
+                    console.log(`⏭️  Checkpoint skipped ${commitResult.skippedLargeFiles.length} large file(s)`);
+                }
+
                 if (commitResult.success && commitResult.commitHash) {
                     gitCommitHash = commitResult.commitHash;
                     
