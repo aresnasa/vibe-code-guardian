@@ -257,7 +257,7 @@ export class StateMonitor {
                     timestamp: now,
                     commitHash: commitHash,
                     message: message,
-                    filesChanged: changedFiles
+                    filesChanged: trackedFiles
                 };
 
                 this.stateHistory.push(snapshot);
