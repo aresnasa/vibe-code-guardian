@@ -358,24 +358,142 @@ function registerCommands(context: vscode.ExtensionContext) {
         })
     );
 
-    // Show File Diff (clicked from tree view)
+    // Open Changed File (click from tree view - open file directly in editor)
     context.subscriptions.push(
-        vscode.commands.registerCommand('vibeCodeGuardian.showFileDiff', async (checkpointId: string, filePath: string) => {
+        vscode.commands.registerCommand('vibeCodeGuardian.openChangedFile', async (checkpointIdOrItem: string | TimelineItem, filePath?: string) => {
             try {
-                const checkpoint = checkpointManager.getCheckpoint(checkpointId);
+                let resolvedFilePath: string | undefined;
+
+                if (typeof checkpointIdOrItem === 'string') {
+                    // Called with (checkpointId, filePath) arguments
+                    resolvedFilePath = filePath;
+                } else if (checkpointIdOrItem && 'checkpointId' in checkpointIdOrItem) {
+                    // Called with TimelineItem from context menu
+                    resolvedFilePath = checkpointIdOrItem.description as string;
+                }
+
+                if (!resolvedFilePath) {
+                    vscode.window.showWarningMessage('Cannot open file: file path not found.');
+                    return;
+                }
+
+                // Resolve to absolute path
+                const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+                if (!workspaceFolder) {
+                    return;
+                }
+
+                const absolutePath = resolvedFilePath.startsWith('/')
+                    ? resolvedFilePath
+                    : vscode.Uri.joinPath(workspaceFolder.uri, resolvedFilePath).fsPath;
+
+                const fileUri = vscode.Uri.file(absolutePath);
+
+                // Check if file exists
+                try {
+                    await vscode.workspace.fs.stat(fileUri);
+                    await vscode.window.showTextDocument(fileUri, { preview: true });
+                } catch {
+                    // File doesn't exist (maybe deleted), show from git history
+                    const checkpointId = typeof checkpointIdOrItem === 'string' 
+                        ? checkpointIdOrItem 
+                        : checkpointIdOrItem.checkpointId;
+
+                    if (checkpointId) {
+                        const checkpoint = checkpointManager.getCheckpoint(checkpointId);
+                        if (checkpoint?.gitCommitHash) {
+                            const content = await gitManager.getFileAtCommit(absolutePath, checkpoint.gitCommitHash);
+                            if (content) {
+                                const doc = await vscode.workspace.openTextDocument({
+                                    content,
+                                    language: resolvedFilePath.split('.').pop() || 'plaintext'
+                                });
+                                await vscode.window.showTextDocument(doc, { preview: true });
+                                return;
+                            }
+                        }
+                    }
+                    vscode.window.showWarningMessage(`File not found: ${resolvedFilePath}`);
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to open file: ${error}`);
+            }
+        })
+    );
+
+    // Show File Diff (show side-by-side diff for a specific file)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showFileDiff', async (checkpointIdOrItem: string | TimelineItem, filePath?: string) => {
+            try {
+                let resolvedCheckpointId: string | undefined;
+                let resolvedFilePath: string | undefined;
+
+                if (typeof checkpointIdOrItem === 'string') {
+                    // Called with (checkpointId, filePath) arguments
+                    resolvedCheckpointId = checkpointIdOrItem;
+                    resolvedFilePath = filePath;
+                } else if (checkpointIdOrItem && 'checkpointId' in checkpointIdOrItem) {
+                    // Called with TimelineItem from context menu
+                    resolvedCheckpointId = checkpointIdOrItem.checkpointId;
+                    resolvedFilePath = checkpointIdOrItem.description as string;
+                }
+
+                if (!resolvedCheckpointId || !resolvedFilePath) {
+                    vscode.window.showWarningMessage('Cannot show diff: missing checkpoint or file information.');
+                    return;
+                }
+
+                const checkpoint = checkpointManager.getCheckpoint(resolvedCheckpointId);
                 if (!checkpoint || !checkpoint.gitCommitHash) {
                     vscode.window.showWarningMessage('Cannot show diff: no git commit associated.');
                     return;
                 }
 
-                const diffContent = await gitManager.getDiff(checkpoint.gitCommitHash);
-                if (diffContent) {
-                    const doc = await vscode.workspace.openTextDocument({
-                        content: diffContent || 'No changes',
-                        language: 'diff'
-                    });
-                    await vscode.window.showTextDocument(doc, { preview: true });
+                const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+                if (!workspaceFolder) {
+                    return;
                 }
+
+                const absolutePath = resolvedFilePath.startsWith('/')
+                    ? resolvedFilePath
+                    : vscode.Uri.joinPath(workspaceFolder.uri, resolvedFilePath).fsPath;
+
+                // Use VS Code's built-in diff editor
+                // Show diff between parent commit (before) and this commit (after)
+                const commitHash = checkpoint.gitCommitHash;
+                const parentCommit = `${commitHash}~1`;
+
+                const relativePath = resolvedFilePath.startsWith('/')
+                    ? resolvedFilePath.replace(workspaceFolder.uri.fsPath + '/', '')
+                    : resolvedFilePath;
+
+                // Create URIs for the git diff scheme
+                const beforeUri = vscode.Uri.parse(`git-checkpoint:${relativePath}?commit=${parentCommit}`);
+                const afterUri = vscode.Uri.parse(`git-checkpoint:${relativePath}?commit=${commitHash}`);
+
+                // Get file content at both commits
+                const beforeContent = await gitManager.getFileAtCommit(absolutePath, parentCommit) ?? '';
+                const afterContent = await gitManager.getFileAtCommit(absolutePath, commitHash) ?? '';
+
+                // Create virtual documents for diff view
+                const beforeDoc = await vscode.workspace.openTextDocument({
+                    content: beforeContent,
+                    language: resolvedFilePath.split('.').pop() || 'plaintext'
+                });
+                const afterDoc = await vscode.workspace.openTextDocument({
+                    content: afterContent,
+                    language: resolvedFilePath.split('.').pop() || 'plaintext'
+                });
+
+                const fileName = resolvedFilePath.split('/').pop() || resolvedFilePath;
+                const shortHash = commitHash.substring(0, 8);
+
+                await vscode.commands.executeCommand('vscode.diff',
+                    beforeDoc.uri,
+                    afterDoc.uri,
+                    `${fileName} (${shortHash}~1 ↔ ${shortHash})`,
+                    { preview: true }
+                );
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to show file diff: ${error}`);
             }
