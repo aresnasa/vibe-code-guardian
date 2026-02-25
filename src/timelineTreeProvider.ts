@@ -185,9 +185,10 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         item.checkpointId = checkpointId;
         item.resourceUri = vscode.Uri.file(filePath);
         item.iconPath = vscode.ThemeIcon.File;
+        // Click to open the file directly in editor
         item.command = {
-            command: 'vibeCodeGuardian.showFileDiff',
-            title: 'Show Diff',
+            command: 'vibeCodeGuardian.openChangedFile',
+            title: 'Open File',
             arguments: [checkpointId, filePath]
         };
         return item;
