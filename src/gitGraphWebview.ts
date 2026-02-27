@@ -44,8 +44,6 @@ export class GitGraphWebviewManager {
             }
         );
 
-        this.panel.iconPath = new vscode.ThemeIcon('git-merge');
-
         const nonce = getNonce();
         this.panel.webview.html = this.getWebviewContent(nonce);
 
