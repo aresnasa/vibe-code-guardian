@@ -183,6 +183,90 @@ export interface DiffHunk {
     content: string;
 }
 
+// ============================================
+// Git Graph Types
+// ============================================
+
+/** Represents a single commit node in the graph */
+export interface GraphCommit {
+    hash: string;
+    abbreviatedHash: string;
+    parents: string[];
+    authorName: string;
+    authorEmail: string;
+    date: string;
+    message: string;
+    refs: string[];
+    isGuardianCommit: boolean;
+    lane: number;
+    children: string[];
+}
+
+/** Information about a branch for the graph */
+export interface GraphBranch {
+    name: string;
+    isCurrent: boolean;
+    commitHash: string;
+    isRemote: boolean;
+    colorIndex: number;
+}
+
+/** Information about a tag */
+export interface GraphTag {
+    name: string;
+    commitHash: string;
+}
+
+/** Full graph data structure sent to the WebView */
+export interface GitGraphData {
+    commits: GraphCommit[];
+    branches: GraphBranch[];
+    tags: GraphTag[];
+    headHash: string;
+    isDetached: boolean;
+    currentBranch?: string;
+    totalLanes: number;
+    mode: 'guardian' | 'full';
+}
+
+/** Represents changed files in a commit (for WebView detail panel) */
+export interface CommitFileChange {
+    path: string;
+    insertions: number;
+    deletions: number;
+    binary: boolean;
+    status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied';
+}
+
+/** Commit detail data sent to WebView on click */
+export interface CommitDetail {
+    hash: string;
+    authorName: string;
+    authorEmail: string;
+    date: string;
+    fullMessage: string;
+    parents: string[];
+    changedFiles: CommitFileChange[];
+}
+
+/** Messages from Extension to WebView */
+export type ExtensionToWebviewMessage =
+    | { type: 'graphData'; data: GitGraphData }
+    | { type: 'commitDetail'; data: CommitDetail }
+    | { type: 'diffContent'; data: { filePath: string; diff: string } }
+    | { type: 'loading'; loading: boolean }
+    | { type: 'error'; message: string };
+
+/** Messages from WebView to Extension */
+export type WebviewToExtensionMessage =
+    | { type: 'requestGraphData'; mode: 'guardian' | 'full'; maxCount: number }
+    | { type: 'requestCommitDetail'; hash: string }
+    | { type: 'requestFileDiff'; hash: string; filePath: string }
+    | { type: 'openFile'; filePath: string; commitHash: string }
+    | { type: 'showVSCodeDiff'; filePath: string; commitHash: string }
+    | { type: 'rollbackToCommit'; hash: string }
+    | { type: 'ready' };
+
 export const DEFAULT_SETTINGS: GuardianSettings = {
     autoCheckpointOnAI: true,
     autoCheckpointOnUserSave: true,
