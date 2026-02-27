@@ -286,6 +286,21 @@
           "command": "vibeCodeGuardian.refresh",
           "when": "view == vibeCodeGuardian.checkpointExplorer",
           "group": "navigation@3"
+        },
+        {
+          "command": "vibeCodeGuardian.showGitGraph",
+          "when": "view == vibeCodeGuardian.gitGraph",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vibeCodeGuardian.toggleGitGraphMode",
+          "when": "view == vibeCodeGuardian.gitGraph",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vibeCodeGuardian.refreshGitGraph",
+          "when": "view == vibeCodeGuardian.gitGraph",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
