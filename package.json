@@ -2,7 +2,7 @@
   "name": "vibe-code-guardian",
   "displayName": "Vibe Code Guardian",
   "description": "Game-like checkpoint system for AI-assisted coding - save, load, and rollback your vibe coding sessions",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "publisher": "vibe-coder",
   "license": "MIT",
   "icon": "images/icon.png",
