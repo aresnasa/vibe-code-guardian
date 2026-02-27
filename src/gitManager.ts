@@ -1574,6 +1574,166 @@ public/bundles/
         return { kept, skipped };
     }
 
+    // ============================================
+    // Git Graph Methods
+    // ============================================
+
+    /**
+     * Get commits with parent info for graph visualization.
+     * Uses git.raw() with custom --format to get parent hashes.
+     */
+    public async getGraphCommits(maxCount: number = 200, guardianOnly: boolean = false): Promise<Array<{
+        hash: string;
+        abbreviatedHash: string;
+        parents: string[];
+        authorName: string;
+        authorEmail: string;
+        date: string;
+        message: string;
+        refs: string;
+    }>> {
+        if (!this.git) { return []; }
+        try {
+            const SEP = '<<GG_SEP>>';
+            const RECORD_SEP = '<<GG_REC>>';
+            const formatStr = [
+                '%H', '%h', '%P', '%an', '%ae', '%aI', '%s', '%D'
+            ].join(SEP);
+
+            const args = [
+                'log',
+                '--all',
+                `--max-count=${maxCount}`,
+                `--format=${formatStr}${RECORD_SEP}`,
+            ];
+
+            if (guardianOnly) {
+                args.push('--grep=[Vibe Guardian]');
+            }
+
+            const raw = await this.git.raw(args);
+            if (!raw || !raw.trim()) { return []; }
+
+            const records = raw.split(RECORD_SEP).filter(r => r.trim());
+            return records.map(record => {
+                const parts = record.trim().split(SEP);
+                return {
+                    hash: parts[0] || '',
+                    abbreviatedHash: parts[1] || '',
+                    parents: (parts[2] || '').split(' ').filter(p => p),
+                    authorName: parts[3] || '',
+                    authorEmail: parts[4] || '',
+                    date: parts[5] || '',
+                    message: parts[6] || '',
+                    refs: parts[7] || ''
+                };
+            }).filter(c => c.hash);
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Get all branches (local and remote) with details
+     */
+    public async getAllBranches(): Promise<Array<{
+        name: string;
+        isCurrent: boolean;
+        commitHash: string;
+        isRemote: boolean;
+    }>> {
+        if (!this.git) { return []; }
+        try {
+            const summary = await this.git.branch(['-a', '-v', '--no-abbrev']);
+            return summary.all.map(branchName => {
+                const branch = summary.branches[branchName];
+                return {
+                    name: branchName,
+                    isCurrent: branch?.current ?? false,
+                    commitHash: branch?.commit ?? '',
+                    isRemote: branchName.startsWith('remotes/')
+                };
+            });
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Get all tags with their commit hashes
+     */
+    public async getAllTags(): Promise<Array<{ name: string; commitHash: string }>> {
+        if (!this.git) { return []; }
+        try {
+            const tagResult = await this.git.tags();
+            const result: Array<{ name: string; commitHash: string }> = [];
+            for (const tag of tagResult.all) {
+                try {
+                    const hash = await this.git.raw(['rev-parse', tag]);
+                    result.push({ name: tag, commitHash: hash.trim() });
+                } catch {
+                    result.push({ name: tag, commitHash: '' });
+                }
+            }
+            return result;
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Get changed files with stats for a specific commit
+     */
+    public async getCommitFileChanges(commitHash: string): Promise<Array<{
+        path: string;
+        insertions: number;
+        deletions: number;
+        binary: boolean;
+        status: string;
+    }>> {
+        if (!this.git) { return []; }
+        try {
+            const numstat = await this.git.raw([
+                'diff-tree', '--no-commit-id', '-r', '--numstat', commitHash
+            ]);
+            const nameStatus = await this.git.raw([
+                'diff-tree', '--no-commit-id', '-r', '--name-status', commitHash
+            ]);
+
+            const statusMap = new Map<string, string>();
+            for (const line of nameStatus.trim().split('\n')) {
+                if (!line.trim()) { continue; }
+                const parts = line.split('\t');
+                if (parts.length >= 2) {
+                    statusMap.set(parts[parts.length - 1], parts[0]);
+                }
+            }
+
+            return numstat.trim().split('\n')
+                .filter(line => line.trim())
+                .map(line => {
+                    const parts = line.split('\t');
+                    const binary = parts[0] === '-';
+                    const filePath = parts[2] || '';
+                    const statusLetter = statusMap.get(filePath) || 'M';
+                    let status = 'modified';
+                    if (statusLetter === 'A') { status = 'added'; }
+                    else if (statusLetter === 'D') { status = 'deleted'; }
+                    else if (statusLetter.startsWith('R')) { status = 'renamed'; }
+                    else if (statusLetter.startsWith('C')) { status = 'copied'; }
+                    return {
+                        path: filePath,
+                        insertions: binary ? 0 : parseInt(parts[0] || '0', 10),
+                        deletions: binary ? 0 : parseInt(parts[1] || '0', 10),
+                        binary,
+                        status
+                    };
+                }).filter(f => f.path);
+        } catch {
+            return [];
+        }
+    }
+
     public dispose(): void {
         // Cleanup if needed
     }
