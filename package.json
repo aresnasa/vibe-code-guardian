@@ -55,6 +55,12 @@
           "name": "Checkpoints",
           "icon": "$(history)",
           "contextualTitle": "Vibe Code Guardian"
+        },
+        {
+          "id": "vibeCodeGuardian.gitGraph",
+          "name": "Git Graph",
+          "icon": "$(git-merge)",
+          "contextualTitle": "Vibe Code Guardian - Git Graph"
         }
       ]
     },
