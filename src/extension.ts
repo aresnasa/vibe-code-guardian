@@ -12,6 +12,8 @@ import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
 import { StateMonitor } from './stateMonitor';
 import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage, NotificationLevel, PushStrategy } from './types';
 import { getLanguageDisplayName, getNextLanguage, getNotificationLevelDisplayName, getNextNotificationLevel, getPushStrategyDisplayName, getNextPushStrategy } from './languageConfig';
+import { GitGraphTreeProvider, GitGraphTreeItem } from './gitGraphTreeProvider';
+import { GitGraphWebviewManager } from './gitGraphWebview';
 
 /**
  * Determines if a notification should be shown based on notification level and checkpoint type
