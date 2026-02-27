@@ -109,6 +109,18 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         context.subscriptions.push(treeView);
 
+        // Register Git Graph Tree View
+        gitGraphTreeProvider = new GitGraphTreeProvider(gitManager);
+        const gitGraphTreeView = vscode.window.createTreeView('vibeCodeGuardian.gitGraph', {
+            treeDataProvider: gitGraphTreeProvider,
+            showCollapseAll: true
+        });
+        context.subscriptions.push(gitGraphTreeView);
+
+        // Create Git Graph WebView Manager
+        gitGraphWebview = new GitGraphWebviewManager(context, gitManager);
+        context.subscriptions.push({ dispose: () => gitGraphWebview.dispose() });
+
         // Register DiffContentProvider for diff view
         const diffProvider = new DiffContentProvider();
         context.subscriptions.push(
