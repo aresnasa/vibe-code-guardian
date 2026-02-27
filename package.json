@@ -238,6 +238,36 @@
         "title": "Toggle Push Strategy (Milestone/All/None)",
         "icon": "$(cloud-upload)",
         "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showGitGraph",
+        "title": "Show Git Graph",
+        "icon": "$(git-merge)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.refreshGitGraph",
+        "title": "Refresh Git Graph",
+        "icon": "$(refresh)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.toggleGitGraphMode",
+        "title": "Toggle Graph Mode (Guardian/Full)",
+        "icon": "$(filter)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.gitGraphCommitDetail",
+        "title": "Show Commit in Graph",
+        "icon": "$(git-commit)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showGitGraphFileDiff",
+        "title": "Show File Diff in Graph",
+        "icon": "$(diff)",
+        "category": "Vibe Guardian"
       }
     ],
     "menus": {
