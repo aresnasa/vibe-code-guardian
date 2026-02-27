@@ -48,6 +48,8 @@ let aiDetector: AIDetector;
 let rollbackManager: RollbackManager;
 let treeProvider: TimelineTreeProvider;
 let stateMonitor: StateMonitor;
+let gitGraphTreeProvider: GitGraphTreeProvider;
+let gitGraphWebview: GitGraphWebviewManager;
 let languageStatusBarItem: vscode.StatusBarItem;
 let notificationStatusBarItem: vscode.StatusBarItem;
 let pushStrategyStatusBarItem: vscode.StatusBarItem;
