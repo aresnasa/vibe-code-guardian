@@ -89,12 +89,9 @@ export class GitGraphProvider {
      * Get detailed information about a specific commit
      */
     public async getCommitDetail(hash: string): Promise<CommitDetail | null> {
-        const rawCommits = await this.gitManager.getGraphCommits(1, false);
-        // We need a single-commit fetch; use getGraphCommits isn't ideal.
-        // Instead, fetch the commit info and file changes directly.
         const fileChanges = await this.gitManager.getCommitFileChanges(hash);
 
-        // Get commit metadata via getGraphCommits with the specific hash
+        // Get commit metadata
         const allCommits = await this.gitManager.getGraphCommits(500, false);
         const commit = allCommits.find(c => c.hash === hash);
 
