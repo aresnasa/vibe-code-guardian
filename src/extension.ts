@@ -1044,6 +1044,85 @@ function registerCommands(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage(`📤 Push strategy changed to: ${displayName}`);
         })
     );
+
+    // ============================================
+    // Git Graph Commands
+    // ============================================
+
+    // Show Git Graph (opens WebView panel)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showGitGraph', async () => {
+            await gitGraphWebview.show();
+        })
+    );
+
+    // Refresh Git Graph
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.refreshGitGraph', () => {
+            gitGraphTreeProvider.refresh();
+            gitGraphWebview.refresh();
+        })
+    );
+
+    // Toggle Graph Mode
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.toggleGitGraphMode', async () => {
+            const current = gitGraphTreeProvider.getMode();
+            const newMode = current === 'guardian' ? 'full' : 'guardian';
+            gitGraphTreeProvider.setMode(newMode);
+            gitGraphWebview.setMode(newMode);
+            vscode.window.showInformationMessage(
+                `Git Graph: ${newMode === 'guardian' ? 'Guardian checkpoints only' : 'Full history'}`
+            );
+        })
+    );
+
+    // Show specific commit in graph (from tree view click)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.gitGraphCommitDetail', async (item?: GitGraphTreeItem | { commitHash: string }) => {
+            const commitHash = item && 'commitHash' in item ? item.commitHash : undefined;
+            if (commitHash) {
+                await gitGraphWebview.show(commitHash);
+            }
+        })
+    );
+
+    // Show file diff from graph tree view
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showGitGraphFileDiff', async (commitHash?: string, filePath?: string) => {
+            if (!commitHash || !filePath) { return; }
+
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            if (!workspaceFolder) { return; }
+
+            const absolutePath = filePath.startsWith('/')
+                ? filePath
+                : vscode.Uri.joinPath(workspaceFolder.uri, filePath).fsPath;
+
+            const parentCommit = `${commitHash}^`;
+            const beforeContent = await gitManager.getFileAtCommit(absolutePath, parentCommit) ?? '';
+            const afterContent = await gitManager.getFileAtCommit(absolutePath, commitHash) ?? '';
+
+            const beforeDoc = await vscode.workspace.openTextDocument({
+                content: beforeContent,
+                language: filePath.split('.').pop() || 'plaintext'
+            });
+            const afterDoc = await vscode.workspace.openTextDocument({
+                content: afterContent,
+                language: filePath.split('.').pop() || 'plaintext'
+            });
+
+            const fileName = filePath.split('/').pop() || filePath;
+            const shortHash = commitHash.substring(0, 8);
+
+            await vscode.commands.executeCommand('vscode.diff',
+                beforeDoc.uri,
+                afterDoc.uri,
+                `${fileName} (${shortHash}~1 ↔ ${shortHash})`,
+                { preview: true }
+            );
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
