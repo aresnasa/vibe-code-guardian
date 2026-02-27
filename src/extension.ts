@@ -1197,9 +1197,18 @@ function setupEventListeners(context: vscode.ExtensionContext) {
     });
 
     // Listen for checkpoint events
-    checkpointManager.onCheckpointCreated(() => treeProvider.refresh());
-    checkpointManager.onCheckpointDeleted(() => treeProvider.refresh());
-    checkpointManager.onSessionChanged(() => treeProvider.refresh());
+    checkpointManager.onCheckpointCreated(() => {
+        treeProvider.refresh();
+        gitGraphTreeProvider.refresh();
+    });
+    checkpointManager.onCheckpointDeleted(() => {
+        treeProvider.refresh();
+        gitGraphTreeProvider.refresh();
+    });
+    checkpointManager.onSessionChanged(() => {
+        treeProvider.refresh();
+        gitGraphTreeProvider.refresh();
+    });
 }
 
 let autoSaveInterval: NodeJS.Timeout | undefined;
