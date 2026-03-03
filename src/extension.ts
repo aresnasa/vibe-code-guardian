@@ -1376,7 +1376,7 @@ function setupEventListeners(context: vscode.ExtensionContext) {
                 );
                 
                 if (checkpoint && shouldShowNotification(settings.notificationLevel, checkpoint.type)) {
-                    vscode.window.showInformationMessage(`💾 User checkpoint: ${checkpoint.name}`);
+                    await notificationManager.showInformationMessage(`💾 User checkpoint: ${checkpoint.name}`);
                 }
                 treeProvider.refresh();
             }
