@@ -66,6 +66,64 @@ EOF
     return $changed
 }
 
+# Publish zed extension to crates.io
+publish_zed_to_crates_io() {
+    local release_version="$1"
+
+    if [ ! -d "zed" ]; then
+        log_warning "zed directory not found, skipping zed publish"
+        return 0
+    fi
+
+    log_info "Publishing zed extension to crates.io..."
+
+    pushd zed > /dev/null
+
+    # Check if cargo is installed
+    if ! command_exists cargo; then
+        log_error "cargo is not installed. Cannot publish zed extension."
+        popd > /dev/null
+        return 1
+    fi
+
+    # Update version in extension.toml to match main project
+    sed -i '' "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${release_version}\"/" extension.toml
+
+    log_info "Building zed extension..."
+    cargo build --release
+
+    if [ $? -ne 0 ]; then
+        log_error "Zed extension build failed"
+        popd > /dev/null
+        return 1
+    fi
+
+    # Check if user wants to publish to crates.io
+    if command -v cargo &> /dev/null; then
+        log_info "Publishing to crates.io..."
+        cargo publish
+
+        if [ $? -eq 0 ]; then
+            log_success "Zed extension published to crates.io!"
+            log_info "Package URL: https://crates.io/crates/vibe-code-guardian"
+
+            # Commit version update
+            git add extension.toml
+            git commit -m "chore: bump version to ${release_version}"
+            git push
+        else
+            log_warning "Zed extension publish to crates.io failed or was aborted"
+            popd > /dev/null
+            return 1
+        fi
+    else
+        log_warning "Skipping zed publish (cargo not available)"
+    fi
+
+    popd > /dev/null
+    return 0
+}
+
 # Commit and push zed submodule repository first, then return to root
 sync_zed_submodule() {
     local release_version="$1"
