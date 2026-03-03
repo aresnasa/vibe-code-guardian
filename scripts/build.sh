@@ -108,6 +108,13 @@ publish_zed_to_crates_io() {
     # Update version in extension.toml to match main project
     sed -i '' "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${release_version}\"/" extension.toml
 
+    # Update version in Cargo.toml to match main project
+    sed -i '' "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${release_version}\"/" Cargo.toml
+
+    # Commit version updates before building
+    git add extension.toml Cargo.toml
+    git commit -m "chore: bump version to ${release_version}"
+
     log_info "Building zed extension..."
     cargo build --release
 
