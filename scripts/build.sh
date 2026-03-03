@@ -284,6 +284,8 @@ do_package() {
 
 # Function to perform publishing
 do_publish() {
+    local skip_zed="${2:-false}"
+
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "Publishing to VS Code Marketplace..."
@@ -295,12 +297,41 @@ do_publish() {
     fi
 
     local current_version=$(get_version)
-    
-    log_info "Publishing version $current_version..."
+
+    # Publish zed extension first
+    if [ "$skip_zed" = "false" ]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_info "Publishing Zed extension..."
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        publish_zed_to_crates_io "$current_version"
+
+        if [ $? -ne 0 ]; then
+            log_warning "Zed extension publish failed, but continuing with VS Code publish"
+        fi
+    else
+        log_info "Skipping Zed extension publish (--skip-zed flag provided)"
+    fi
+
+    log_info "Publishing version $current_version to VS Code Marketplace..."
     npx @vscode/vsce publish
-    
+
     log_success "Published version $current_version!"
     log_info "Extension URL: https://marketplace.visualstudio.com/items?itemName=vibe-coder.vibe-code-guardian"
+
+    # Print zed information
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "Zed Extension Info"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "To install in Zed, add to your settings.json:"
+    echo "  \"extensions\": {"
+    echo "    \"vibe-code-guardian\": {"
+    echo "      \"version\": \"${current_version}\""
+    echo "    }"
+    echo "  }"
+    log_info "Or run: zed extensions install vibe-code-guardian"
+    echo ""
 }
 
 # Function to push to git
