@@ -436,7 +436,7 @@ case "$MODE" in
         do_build
         do_package
         do_publish "$SKIP_ZED"
-        do_git_push
+        do_git_push true true  # create tag, this is a release
         ;;
     full)
         # Full release with version bump
@@ -447,7 +447,7 @@ case "$MODE" in
         do_build
         do_package
         do_publish "$SKIP_ZED"
-        do_git_push
+        do_git_push true true  # create tag, this is a release
         ;;
     *)
         log_error "Unknown mode: $MODE"
