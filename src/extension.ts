@@ -460,8 +460,8 @@ function registerCommands(context: vscode.ExtensionContext) {
                 }
 
                 const checkpoint = checkpointManager.getCheckpoint(resolvedCheckpointId);
-                if (!checkpoint || !checkpoint.gitCommitHash) {
-                    vscode.window.showWarningMessage('Cannot show diff: no git commit associated.');
+                if (!checkpoint) {
+                    vscode.window.showWarningMessage('Cannot show diff: checkpoint not found.');
                     return;
                 }
 
@@ -474,18 +474,58 @@ function registerCommands(context: vscode.ExtensionContext) {
                     ? resolvedFilePath
                     : vscode.Uri.joinPath(workspaceFolder.uri, resolvedFilePath).fsPath;
 
+                const normalizePath = (p: string) => p.replace(/\\/g, '/');
+                const workspaceRoot = normalizePath(workspaceFolder.uri.fsPath);
+                const normalizedResolvedPath = normalizePath(resolvedFilePath);
+                const normalizedAbsolutePath = normalizePath(absolutePath);
+                const normalizedRelativePath = normalizedResolvedPath.startsWith('/')
+                    ? normalizedResolvedPath.replace(`${workspaceRoot}/`, '')
+                    : normalizedResolvedPath;
+
+                const fileSnapshot = checkpoint.changedFiles.find((f) => {
+                    const checkpointPath = normalizePath(f.path);
+                    return checkpointPath === normalizedResolvedPath ||
+                        checkpointPath === normalizedAbsolutePath ||
+                        checkpointPath === normalizedRelativePath ||
+                        checkpointPath.endsWith(`/${normalizedRelativePath}`);
+                });
+
+                // Fallback for checkpoints without Git commit: use stored snapshot/current file content.
+                if (!checkpoint.gitCommitHash) {
+                    let fallbackCurrentContent = '';
+                    try {
+                        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absolutePath));
+                        fallbackCurrentContent = Buffer.from(bytes).toString('utf8');
+                    } catch {
+                        // keep empty if file cannot be read (deleted/missing)
+                    }
+
+                    const beforeContent = fileSnapshot?.previousContent ?? '';
+                    const afterContent = fileSnapshot?.currentContent ?? fallbackCurrentContent;
+
+                    const beforeDoc = await vscode.workspace.openTextDocument({
+                        content: beforeContent,
+                        language: resolvedFilePath.split('.').pop() || 'plaintext'
+                    });
+                    const afterDoc = await vscode.workspace.openTextDocument({
+                        content: afterContent,
+                        language: resolvedFilePath.split('.').pop() || 'plaintext'
+                    });
+
+                    const fileName = resolvedFilePath.split('/').pop() || resolvedFilePath;
+                    await vscode.commands.executeCommand('vscode.diff',
+                        beforeDoc.uri,
+                        afterDoc.uri,
+                        `${fileName} (snapshot ↔ current)`,
+                        { preview: true }
+                    );
+                    return;
+                }
+
                 // Use VS Code's built-in diff editor
                 // Show diff between parent commit (before) and this commit (after)
                 const commitHash = checkpoint.gitCommitHash;
                 const parentCommit = `${commitHash}~1`;
-
-                const relativePath = resolvedFilePath.startsWith('/')
-                    ? resolvedFilePath.replace(workspaceFolder.uri.fsPath + '/', '')
-                    : resolvedFilePath;
-
-                // Create URIs for the git diff scheme
-                const beforeUri = vscode.Uri.parse(`git-checkpoint:${relativePath}?commit=${parentCommit}`);
-                const afterUri = vscode.Uri.parse(`git-checkpoint:${relativePath}?commit=${commitHash}`);
 
                 // Get file content at both commits
                 const beforeContent = await gitManager.getFileAtCommit(absolutePath, parentCommit) ?? '';
