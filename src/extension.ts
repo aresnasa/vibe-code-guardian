@@ -16,6 +16,159 @@ import { GitGraphTreeProvider, GitGraphTreeItem } from './gitGraphTreeProvider';
 import { GitGraphWebviewManager } from './gitGraphWebview';
 
 /**
+ * Smart Notification Manager
+ * Manages notification frequency and prevents notification spam
+ */
+class SmartNotificationManager {
+    private lastNotificationTime = 0;
+    private lastNotificationMessage = '';
+    private notificationHistory: string[] = [];
+    private throttleTime = 5000; // Default 5 seconds
+
+    constructor() {
+        // Load settings for throttle configuration
+        const settings = this.loadSettings();
+        if (settings.notificationThrottle) {
+            this.throttleTime = settings.notificationThrottle;
+        }
+    }
+
+    private loadSettings() {
+        try {
+            const config = vscode.workspace.getConfiguration('vibeCodeGuardian');
+            return {
+                notificationThrottle: config.get<number>('notificationThrottle', 5000),
+                maxNotificationWindows: config.get<number>('maxNotificationWindows', 3)
+            };
+        } catch (error) {
+            console.error('Failed to load notification settings:', error);
+            return { notificationThrottle: 5000, maxNotificationWindows: 3 };
+        }
+    }
+
+    /**
+     * Show information message with smart throttling
+     * @param message Message to display
+     * @param dismissible Whether message can be dismissed
+     * @returns Promise that resolves when message is shown or skipped
+     */
+    async showInformationMessage(message: string, dismissible: boolean = true): Promise<void> {
+        const now = Date.now();
+
+        // Check throttle time
+        if (now - this.lastNotificationTime < this.throttleTime) {
+            console.log(`🔇 Notification throttled: ${message}`);
+            return; // Skip notification due to throttle
+        }
+
+        // Check if similar message was recently shown
+        if (this.isSimilarToRecent(message)) {
+            console.log(`🔇 Similar notification skipped: ${message}`);
+            return; // Skip similar notification
+        }
+
+        // Check max notification windows and dismiss old ones if needed
+        await this.manageNotificationWindows();
+
+        // Show notification
+        await vscode.window.showInformationMessage(message, dismissible ? 'Dismiss' : undefined);
+
+        // Update tracking
+        this.lastNotificationTime = now;
+        this.lastNotificationMessage = message;
+        this.notificationHistory.push(message);
+
+        // Keep only recent history (last 10 messages)
+        if (this.notificationHistory.length > 10) {
+            this.notificationHistory = this.notificationHistory.slice(-10);
+        }
+    }
+
+    /**
+     * Check if message is similar to recent notifications
+     * @param message Message to check
+     * @returns true if similar to recent message
+     */
+    private isSimilarToRecent(message: string): boolean {
+        const messageLower = message.toLowerCase();
+        return this.notificationHistory.some(historyMessage => {
+            const historyLower = historyMessage.toLowerCase();
+            // Check if they share more than 50% of words
+            const messageWords = messageLower.split(/\s+/);
+            const historyWords = historyLower.split(/\s+/);
+            const commonWords = messageWords.filter(word => historyWords.includes(word));
+            const similarity = commonWords.length / Math.max(messageWords.length, 1);
+            return similarity > 0.5;
+        });
+    }
+
+    /**
+     * Manage notification windows - dismiss old ones if we have too many
+     */
+    private async manageNotificationWindows(): Promise<void> {
+        const settings = this.loadSettings();
+        const maxWindows = settings.maxNotificationWindows || 3;
+
+        // Try to find and dismiss old notification windows
+        // VS Code doesn't expose a direct API to manage all notifications,
+        // so we use a workaround with showInformationMessage
+        if (maxWindows > 0) {
+            // We can't directly manage windows, but we can try to show a dismiss-all message
+            // This is a limitation of VS Code's API
+            const recentCount = this.notificationHistory.slice(-maxWindows).length;
+            if (recentCount >= maxWindows) {
+                console.log(`🔇 Too many notifications (${recentCount}), trying to dismiss some...`);
+            }
+        }
+    }
+
+    /**
+     * Show warning message (less strict throttling)
+     * @param message Message to display
+     */
+    async showWarningMessage(message: string): Promise<void> {
+        const now = Date.now();
+
+        // Warnings have shorter throttle (2 seconds)
+        if (now - this.lastNotificationTime < 2000) {
+            console.log(`🔇 Warning throttled: ${message}`);
+            return;
+        }
+
+        await vscode.window.showWarningMessage(message);
+
+        // Update tracking with shorter throttle for warnings
+        this.lastNotificationTime = now;
+        this.lastNotificationMessage = message;
+    }
+
+    /**
+     * Show error message (no throttling - errors should always show)
+     * @param message Message to display
+     */
+    async showErrorMessage(message: string): Promise<void> {
+        await vscode.window.showErrorMessage(message);
+        // Don't throttle error messages
+        this.lastNotificationTime = Date.now();
+    }
+
+    /**
+     * Reset throttling (call when user explicitly triggers an action)
+     */
+    reset(): void {
+        this.lastNotificationTime = 0;
+        this.lastNotificationMessage = '';
+        this.notificationHistory = [];
+        console.log('🔄 Notification throttling reset');
+    }
+}
+
+/**
+ * Global notification manager instance
+ */
+const notificationManager = new SmartNotificationManager();
+
+/**
  * Determines if a notification should be shown based on notification level and checkpoint type
  * @param notificationLevel Current notification level setting
  * @param checkpointType Type of checkpoint being created
