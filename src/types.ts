@@ -158,6 +158,10 @@ export interface GuardianSettings {
     commitLanguage: CommitLanguage;
     /** Push strategy: 'none' = never push, 'milestone' = only manual checkpoints, 'all' = push all commits */
     pushStrategy: PushStrategy;
+    /** Minimum time between similar notifications in milliseconds (default: 5000ms = 5 seconds) */
+    notificationThrottle: number;
+    /** Maximum number of notification windows to show before auto-dismissing (default: 3) */
+    maxNotificationWindows: number;
 }
 
 export interface RollbackResult {
