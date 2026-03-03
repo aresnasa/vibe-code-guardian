@@ -20,8 +20,13 @@ MODE="${1:-build}"  # 'build' (default), 'package', or 'publish'
 VERSION_BUMP="${2:-patch}"  # 'patch', 'minor', 'major' for version bumping
 SKIP_ZED=false  # whether to skip zed extension publish
 
-# Parse additional arguments
-shift 2  # Remove first two arguments
+# Parse additional arguments (skip first 2 if they exist, otherwise skip 1)
+if [ $# -ge 2 ]; then
+    shift 2
+elif [ $# -eq 1 ]; then
+    shift 1
+fi
+
 for arg in "$@"; do
     case "$arg" in
         --skip-zed)
