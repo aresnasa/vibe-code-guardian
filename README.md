@@ -11,6 +11,11 @@ Game-like checkpoint system for AI-assisted coding sessions. Save, load, and rol
 - **📊 Diff View** - See what changed since any checkpoint
 - **🎮 Sessions** - Organize checkpoints by coding session
 
+## Available On
+
+- **VS Code**: [Visual Studio Code Marketplace](https://marketplace.visualstudio.com/items?itemName=vibe-coder.vibe-code-guardian)
+- **Zed**: [crates.io](https://crates.io/crates/vibe-code-guardian)
+
 ## Keyboard Shortcuts
 
 | Action | Windows/Linux | macOS |
