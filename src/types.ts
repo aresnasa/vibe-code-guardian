@@ -281,6 +281,8 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
     createSessionBranch: false,
     showNotifications: true,
     notificationLevel: 'milestone', // Only show for manual/milestone checkpoints by default
+    notificationThrottle: 5000, // 5 seconds between similar notifications
+    maxNotificationWindows: 3, // Maximum notification windows to show
     namingPattern: '{type}-{timestamp}',
     ignorePatterns: [
         'node_modules/**',
