@@ -369,6 +369,9 @@ do_publish() {
 
 # Function to push to git
 do_git_push() {
+    local create_tag="${1:-true}"  # Create git tag by default
+    local release_type="${2:-false}"  # Whether this is a release (publish/full)
+
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "Pushing to GitHub..."
@@ -383,26 +386,41 @@ do_git_push() {
 
     # Sync zed first so main repo can include the latest submodule pointer
     sync_zed_submodule "$current_version"
-    
+
     # Check if there are changes to commit
     if git diff --quiet && git diff --cached --quiet; then
         log_warning "No changes to commit"
     else
         log_info "Staging changes..."
         git add .
-        
+
         log_info "Committing changes..."
-        git commit -m "🚀 Release v${current_version}"
+
+        if [ "$release_type" = "true" ]; then
+            git commit -m "🚀 Release v${current_version}"
+        else
+            git commit -m "📦 Build v${current_version}"
+        fi
     fi
 
-    log_info "Creating git tag..."
-    git tag "v${current_version}" 2>/dev/null || log_warning "Tag v${current_version} already exists"
+    # Only create git tags for releases, not for regular builds
+    if [ "$create_tag" = "true" ] && [ "$release_type" = "true" ]; then
+        log_info "Creating git tag for release..."
+        git tag "v${current_version}" 2>/dev/null || log_warning "Tag v${current_version} already exists"
 
-    log_info "Pushing to remote..."
-    git push origin main
-    git push origin "v${current_version}" 2>/dev/null || log_warning "Tag push skipped"
-    
-    log_success "GitHub push completed!"
+        log_info "Pushing to remote..."
+        git push origin main
+        git push origin "v${current_version}" 2>/dev/null || log_warning "Tag push skipped"
+    elif [ "$create_tag" = "true" ]; then
+        # Just push without tag for regular builds
+        log_info "Pushing to remote..."
+        git push origin main
+    else
+        # Don't push for non-release operations
+        log_info "Git changes committed, but not pushed (not a release)"
+    fi
+
+    log_success "GitHub operations completed!"
 }
 
 # Main execution
