@@ -1,0 +1,4 @@
+[submodule "zed"]
+	path = zed
+	url = https://github.com/aresnasa/vibe-code-guardian-zed.git
+	branch = main
