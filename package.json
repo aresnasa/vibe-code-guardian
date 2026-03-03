@@ -425,6 +425,20 @@
           ],
           "description": "Control when to show notification messages: 'all' (every checkpoint), 'milestone' (manual/session only), 'none' (silent)"
         },
+        "vibeCodeGuardian.notificationThrottle": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1000,
+          "maximum": 60000,
+          "description": "Minimum time between similar notifications in milliseconds (default: 5000ms = 5 seconds). Helps prevent notification spam during rapid changes."
+        },
+        "vibeCodeGuardian.maxNotificationWindows": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Maximum number of notification windows to show before suggesting to dismiss (default: 3). Higher values may cause screen clutter."
+        },
         "vibeCodeGuardian.commitLanguage": {
           "type": "string",
           "enum": ["auto", "en", "zh"],
