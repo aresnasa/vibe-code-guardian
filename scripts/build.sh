@@ -132,11 +132,6 @@ publish_zed_to_crates_io() {
         if [ $? -eq 0 ]; then
             log_success "Zed extension published to crates.io!"
             log_info "Package URL: https://crates.io/crates/vibe-code-guardian"
-
-            # Commit version update
-            git add extension.toml
-            git commit -m "chore: bump version to ${release_version}"
-            git push
         else
             log_warning "Zed extension publish to crates.io failed or was aborted"
             popd > /dev/null
@@ -145,6 +140,10 @@ publish_zed_to_crates_io() {
     else
         log_warning "Skipping zed publish (cargo not available)"
     fi
+
+    # Push the version commit
+    log_info "Pushing zed version commit..."
+    git push
 
     popd > /dev/null
     return 0
