@@ -63,4 +63,3 @@ pnpm-lock.yaml
 # OS generated
 .DS_Store
 Thumbs.db
-zed/target

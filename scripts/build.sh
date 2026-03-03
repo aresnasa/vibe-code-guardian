@@ -41,6 +41,73 @@ command_exists() {
     command -v "$1" &> /dev/null
 }
 
+# Ensure zed repo ignores local build artifacts
+ensure_zed_ignore_rules() {
+    local zed_ignore_file="zed/.gitignore"
+    local changed=0
+
+    if [ ! -f "$zed_ignore_file" ]; then
+        cat > "$zed_ignore_file" <<'EOF'
+target/
+Cargo.lock
+EOF
+        changed=1
+    else
+        if ! grep -qx 'target/' "$zed_ignore_file"; then
+            echo "target/" >> "$zed_ignore_file"
+            changed=1
+        fi
+        if ! grep -qx 'Cargo.lock' "$zed_ignore_file"; then
+            echo "Cargo.lock" >> "$zed_ignore_file"
+            changed=1
+        fi
+    fi
+
+    return $changed
+}
+
+# Commit and push zed submodule repository first, then return to root
+sync_zed_submodule() {
+    local release_version="$1"
+
+    if [ ! -d "zed" ]; then
+        log_warning "zed directory not found, skipping zed sync"
+        return 0
+    fi
+
+    if [ ! -d "zed/.git" ] && [ ! -f "zed/.git" ]; then
+        log_warning "zed is not a git repository, skipping zed sync"
+        return 0
+    fi
+
+    log_info "Syncing zed repository..."
+    ensure_zed_ignore_rules || true
+
+    pushd zed > /dev/null
+
+    local zed_branch
+    zed_branch=$(git rev-parse --abbrev-ref HEAD)
+
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        log_info "Staging zed changes..."
+        git add -A
+        log_info "Committing zed changes..."
+        git commit -m "chore: sync zed for release v${release_version}"
+    else
+        log_success "No zed changes to commit"
+    fi
+
+    log_info "Pushing zed (${zed_branch})..."
+    git push origin "$zed_branch"
+
+    local zed_head
+    zed_head=$(git rev-parse --short HEAD)
+    popd > /dev/null
+
+    git add zed .gitmodules 2>/dev/null || true
+    log_success "zed synced at ${zed_head}"
+}
+
 # Function to get current version from package.json
 get_version() {
     grep '"version"' package.json | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/'
@@ -191,6 +258,9 @@ do_git_push() {
     fi
 
     local current_version=$(get_version)
+
+    # Sync zed first so main repo can include the latest submodule pointer
+    sync_zed_submodule "$current_version"
     
     # Check if there are changes to commit
     if git diff --quiet && git diff --cached --quiet; then
