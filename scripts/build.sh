@@ -415,12 +415,12 @@ case "$MODE" in
     *)
         log_error "Unknown mode: $MODE"
         echo ""
-        echo "Usage: $0 [mode] [version-bump]"
+        echo "Usage: $0 [mode] [version-bump] [options]"
         echo ""
         echo "Modes:"
         echo "  build      - Compile and verify the project (default)"
         echo "  package    - Build and create .vsix package"
-        echo "  publish    - Build, package, publish to Marketplace, and push to GitHub"
+        echo "  publish    - Build, package, publish to VS Code Marketplace and Zed, and push to GitHub"
         echo "  full       - Full release with version bump"
         echo ""
         echo "Version bump (for 'full' mode):"
@@ -428,11 +428,15 @@ case "$MODE" in
         echo "  minor      - Bump minor version (0.1.5 → 0.2.0)"
         echo "  major      - Bump major version (0.1.5 → 1.0.0)"
         echo ""
+        echo "Options:"
+        echo "  --skip-zed Skip publishing Zed extension to crates.io"
+        echo ""
         echo "Examples:"
         echo "  ./scripts/build.sh build"
         echo "  ./scripts/build.sh package"
         echo "  ./scripts/build.sh publish"
-        echo "  ./scripts/build.sh full patch"
+        echo "  ./scripts/build.sh publish patch --skip-zed"
+        echo "  ./scripts/build.sh full minor"
         exit 1
         ;;
 esac
