@@ -5,3 +5,4 @@
 5. 回归测试本项目的所有功能
 6. 现在调整 git 追踪 zed 需要一并提交到 github，同时调整 scripts/build.sh
 7. 改造本项目需要推送到 vscode-market 还需要推送到 zed.dev
+8. 
