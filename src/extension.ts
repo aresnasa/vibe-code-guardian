@@ -71,7 +71,7 @@ class SmartNotificationManager {
         await this.manageNotificationWindows();
 
         // Show notification
-        await vscode.window.showInformationMessage(message, dismissible ? 'Dismiss' : undefined);
+        await vscode.window.showInformationMessage(message, dismissible ? 'Dismiss' : undefined, 'OK');
 
         // Update tracking
         this.lastNotificationTime = now;
