@@ -1337,7 +1337,7 @@ function setupEventListeners(context: vscode.ExtensionContext) {
                 { description: `AI-detected changes (${event.source})` }
             );
             if (checkpoint && shouldShowNotification(settings.notificationLevel, CheckpointType.AIGenerated)) {
-                vscode.window.showInformationMessage(`🤖 AI checkpoint: ${checkpoint.name}`);
+                await notificationManager.showInformationMessage(`🤖 AI checkpoint: ${checkpoint.name}`);
             }
             treeProvider.refresh();
         }
