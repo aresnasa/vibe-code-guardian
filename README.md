@@ -46,7 +46,8 @@ Open Command Palette (`Ctrl+Shift+P`) and type "Vibe Guardian":
 ## Requirements
 
 - Git repository (recommended for full functionality)
-- VS Code 1.107.0 or higher
+- **VS Code**: 1.107.0 or higher
+- **Zed**: Latest version with extension support
 
 ## License
 
