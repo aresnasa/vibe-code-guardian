@@ -2,3 +2,5 @@
 2. 集成 git graph 到本项目，支持git 代码变化的图展示，包括上下文和依赖等功能。
 3. 可以参考https://github.com/abhigyanpatwari/GitNexus中的核心概念
 4. Cannot show diff: no git commit associated.检查 diff 函数问题
+5. 回归测试本项目的所有功能
+6. 现在调整 git 追踪 zed 需要一并提交到 github，同时调整 scripts/build.sh
