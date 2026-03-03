@@ -4,3 +4,4 @@
 4. Cannot show diff: no git commit associated.检查 diff 函数问题
 5. 回归测试本项目的所有功能
 6. 现在调整 git 追踪 zed 需要一并提交到 github，同时调整 scripts/build.sh
+7. 
