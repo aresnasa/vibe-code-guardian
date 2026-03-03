@@ -14,6 +14,10 @@
         "/^git add \\.gitignore && git commit -m \"chore: add \\.gitignore to exclude build artifacts\" && git push origin main$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^cd zed && git rev-parse --show-toplevel$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }
