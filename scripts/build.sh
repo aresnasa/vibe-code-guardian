@@ -127,6 +127,14 @@ publish_zed_to_crates_io() {
     # Check if user wants to publish to crates.io
     if command -v cargo &> /dev/null; then
         log_info "Publishing to crates.io..."
+
+        # Check if there are any uncommitted changes before publishing
+        if ! git diff --quiet || ! git diff --cached --quiet; then
+            log_warning "There are uncommitted changes. Adding and committing..."
+            git add -A
+            git commit -m "chore: final changes before publishing"
+        fi
+
         cargo publish
 
         if [ $? -eq 0 ]; then
