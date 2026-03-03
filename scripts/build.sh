@@ -18,6 +18,20 @@ NC='\033[0m' # No Color
 # Parse command line arguments
 MODE="${1:-build}"  # 'build' (default), 'package', or 'publish'
 VERSION_BUMP="${2:-patch}"  # 'patch', 'minor', 'major' for version bumping
+SKIP_ZED=false  # whether to skip zed extension publish
+
+# Parse additional arguments
+shift 2  # Remove first two arguments
+for arg in "$@"; do
+    case "$arg" in
+        --skip-zed)
+            SKIP_ZED=true
+            ;;
+        *)
+            log_warning "Unknown argument: $arg"
+            ;;
+    esac
+done
 
 # Function to print colored output
 log_info() {
