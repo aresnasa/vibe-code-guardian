@@ -398,7 +398,7 @@ case "$MODE" in
     publish)
         do_build
         do_package
-        do_publish
+        do_publish "$SKIP_ZED"
         do_git_push
         ;;
     full)
@@ -406,10 +406,10 @@ case "$MODE" in
         log_warning "Bumping $VERSION_BUMP version..."
         new_version=$(bump_version "$VERSION_BUMP")
         log_success "Version updated to $new_version"
-        
+
         do_build
         do_package
-        do_publish
+        do_publish "$SKIP_ZED"
         do_git_push
         ;;
     *)
