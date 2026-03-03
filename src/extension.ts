@@ -367,7 +367,7 @@ function registerCommands(context: vscode.ExtensionContext) {
                     changedFiles
                 );
                 if (checkpoint) {
-                    vscode.window.showInformationMessage(`⚡ Quick saved: ${checkpoint.name}`);
+                    await notificationManager.showInformationMessage(`⚡ Quick saved: ${checkpoint.name}`);
                     treeProvider.refresh();
                 }
             } catch (error) {
