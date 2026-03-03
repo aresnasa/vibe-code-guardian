@@ -347,7 +347,7 @@ function registerCommands(context: vscode.ExtensionContext) {
                     { description: description || undefined }
                 );
                 if (checkpoint) {
-                    vscode.window.showInformationMessage(`✅ Checkpoint saved: ${checkpoint.name}`);
+                    await notificationManager.showInformationMessage(`✅ Checkpoint saved: ${checkpoint.name}`);
                     treeProvider.refresh();
                 }
             } catch (error) {
