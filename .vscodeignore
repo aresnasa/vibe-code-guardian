@@ -12,3 +12,9 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+# Test files and demo scripts
+test-*.sh
+test-*.txt
+verify-*.sh
+DEMO-*.md
+HARD-RESET-*.md
