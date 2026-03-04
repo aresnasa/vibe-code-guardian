@@ -19,6 +19,7 @@ NC='\033[0m' # No Color
 MODE="${1:-build}"  # 'build' (default), 'package', or 'publish'
 VERSION_BUMP="${2:-patch}"  # 'patch', 'minor', 'major' for version bumping
 SKIP_ZED=false  # whether to skip zed extension publish
+HARD_RESET=false  # whether to perform hard reset with backup
 
 # Parse additional arguments (skip first 2 if they exist, otherwise skip 1)
 if [ $# -ge 2 ]; then
@@ -31,6 +32,9 @@ for arg in "$@"; do
     case "$arg" in
         --skip-zed)
             SKIP_ZED=true
+            ;;
+        --hard)
+            HARD_RESET=true
             ;;
         *)
             log_warning "Unknown argument: $arg"
