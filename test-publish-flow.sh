@@ -38,11 +38,11 @@ if [ -d "zed" ]; then
     echo "4. Checking zed extension..."
     if [ -f "zed/extension.toml" ]; then
         echo "✓ Zed extension.toml exists"
-        echo "   Version: $(grep -oP 'version = "\K[^"]+' zed/extension.toml)"
+        echo "   Version: $(grep -o 'version = "[^"]*"' zed/extension.toml | cut -d'"' -f2)"
     fi
     if [ -f "zed/Cargo.toml" ]; then
         echo "✓ Zed Cargo.toml exists"
-        echo "   Version: $(grep -oP 'version = "\K[^"]+' zed/Cargo.toml)"
+        echo "   Version: $(grep -o 'version = "[^"]*"' zed/Cargo.toml | cut -d'"' -f2)"
     fi
 fi
 
