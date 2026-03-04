@@ -22,6 +22,10 @@
         "/^vsce show vibe-coder\\.vibe-code-guardian$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^npx @vscode/vsce package$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }
