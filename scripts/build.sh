@@ -64,6 +64,151 @@ command_exists() {
     command -v "$1" &> /dev/null
 }
 
+# Function to create backup of current working state
+create_backup() {
+    local backup_timestamp=$(date +"%Y%m%d_%H%M%S")
+    local backup_dir=".backup/${backup_timestamp}"
+    local backup_log=".backup/backup.log"
+
+    mkdir -p ".backup"
+
+    # Log backup operation
+    echo "Backup created at: $(date)" >> "$backup_log"
+    echo "Backup directory: $backup_dir" >> "$backup_log"
+
+    # Stash current changes
+    log_info "Stashing current changes..."
+    git stash push -u -m "Auto-backup before hard reset at ${backup_timestamp}" --include-untracked
+
+    if [ $? -eq 0 ]; then
+        local stash_ref=$(git stash list -n 1 --format="%H")
+        echo "Git stash reference: $stash_ref" >> "$backup_log"
+
+        # Create backup directory structure
+        mkdir -p "$backup_dir"
+
+        # Copy important files to backup
+        cp package.json "$backup_dir/" 2>/dev/null || true
+        cp README.md "$backup_dir/" 2>/dev/null || true
+
+        # Save the current git state info
+        git rev-parse HEAD > "$backup_dir/git_head.txt"
+        git rev-parse --abbrev-ref HEAD > "$backup_dir/git_branch.txt"
+        git log --oneline -1 > "$backup_dir/git_commit.txt"
+
+        log_success "Backup created successfully!"
+        log_info "Backup location: $backup_dir"
+        log_info "Stash reference: $stash_ref"
+        return 0
+    else
+        log_warning "No changes to backup (working directory clean)"
+        return 1
+    fi
+}
+
+# Function to list available backups
+list_backups() {
+    local backup_log=".backup/backup.log"
+
+    if [ ! -f "$backup_log" ]; then
+        log_info "No backups found"
+        return 1
+    fi
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "Available Backups"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cat "$backup_log"
+
+    # List stashes
+    echo ""
+    log_info "Git Stashes:"
+    git stash list
+
+    echo ""
+    echo "To restore a backup:"
+    echo "  1. Restore git stash: git stash pop <stash_reference>"
+    echo "  2. Or restore from backup directory"
+}
+
+# Function to restore from backup
+restore_backup() {
+    local backup_timestamp="$1"
+
+    if [ -z "$backup_timestamp" ]; then
+        log_error "Please provide a backup timestamp"
+        return 1
+    fi
+
+    local backup_dir=".backup/${backup_timestamp}"
+
+    if [ ! -d "$backup_dir" ]; then
+        log_error "Backup not found: $backup_dir"
+        return 1
+    fi
+
+    log_info "Restoring from backup: $backup_timestamp"
+
+    # Read the git head and reset
+    if [ -f "$backup_dir/git_head.txt" ]; then
+        local git_head=$(cat "$backup_dir/git_head.txt")
+        log_info "Resetting to git commit: $git_head"
+        git reset --hard "$git_head"
+    fi
+
+    log_success "Backup restored successfully!"
+    log_info "You may need to manually restore any uncommitted files from the backup directory"
+}
+
+# Function to check if hard reset is needed and perform backup
+check_hard_reset() {
+    if [ "$HARD_RESET" = "true" ]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_warning "Hard reset mode requested (--hard flag)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        log_info "This will:"
+        echo "  • Reset the working directory to clean state"
+        echo "  • Remove all uncommitted changes"
+        echo "  • Remove untracked files"
+        echo ""
+
+        # Check if there are changes to backup
+        if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+            log_info "Changes detected. Creating backup before hard reset..."
+            create_backup
+
+            if [ $? -eq 0 ]; then
+                echo ""
+                read -p "Do you want to proceed with hard reset? (y/n): " -n 1 -r
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    log_info "Hard reset cancelled"
+                    exit 0
+                fi
+            fi
+        else
+            log_info "No changes to backup"
+            read -p "Do you want to proceed with hard reset? (y/n): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                log_info "Hard reset cancelled"
+                exit 0
+            fi
+        fi
+
+        # Perform hard reset
+        log_info "Performing hard reset..."
+        git reset --hard HEAD
+        git clean -fd
+
+        log_success "Hard reset completed!"
+        echo ""
+    fi
+}
+
 # Ensure zed repo ignores local build artifacts
 ensure_zed_ignore_rules() {
     local zed_ignore_file="zed/.gitignore"
