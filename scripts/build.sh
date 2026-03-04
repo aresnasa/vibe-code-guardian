@@ -315,6 +315,66 @@ do_package() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
+# Function to check if VSCE is authenticated
+check_vsce_auth() {
+    # Check if VSCE_PAT environment variable is set
+    if [ -n "$VSCE_PAT" ]; then
+        log_info "Using VSCE_PAT environment variable for authentication"
+        return 0
+    fi
+
+    # Check if already logged in
+    if vsce whoami &>/dev/null; then
+        log_success "Already authenticated with VSCE"
+        return 0
+    fi
+
+    return 1
+}
+
+# Function to handle VSCE authentication
+handle_vsce_auth() {
+    log_info "Authentication required for VS Code Marketplace publishing"
+    echo ""
+    echo "To publish to VS Code Marketplace, you need to provide a Personal Access Token (PAT)"
+    echo ""
+    echo "1. Go to: https://marketplace.visualstudio.com/manage/publishers/vibe-coder"
+    echo "2. Create a new PAT with 'Marketplace publish' permission"
+    echo "3. Set the token using one of these methods:"
+    echo "   a) Export environment variable: export VSCE_PAT='your_token_here'"
+    echo "   b) Run: vsce login vibe-coder (then enter your token)"
+    echo ""
+
+    # Check if VSCE_PAT is set
+    if [ -z "$VSCE_PAT" ]; then
+        read -p "Do you have a PAT ready? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            read -p "Enter your PAT: " -r vsce_token
+            VSCE_PAT="$vsce_token"
+            export VSCE_PAT
+            log_info "PAT set for this session"
+        else
+            log_error "Authentication required. Please obtain a PAT and try again."
+            return 1
+        fi
+    fi
+
+    # Try to authenticate
+    if [ -n "$VSCE_PAT" ]; then
+        echo "$VSCE_PAT" | npx @vscode/vsce login vibe-coder --pat
+        if [ $? -eq 0 ]; then
+            log_success "Authentication successful!"
+            return 0
+        else
+            log_error "Authentication failed. Please check your PAT."
+            return 1
+        fi
+    fi
+
+    return 1
+}
+
 # Function to perform publishing
 do_publish() {
     local skip_zed="${2:-false}"
@@ -330,6 +390,14 @@ do_publish() {
     fi
 
     local current_version=$(get_version)
+
+    # Check and handle authentication
+    if ! check_vsce_auth; then
+        if ! handle_vsce_auth; then
+            log_error "Cannot proceed without authentication"
+            return 1
+        fi
+    fi
 
     # Publish zed extension first
     if [ "$skip_zed" = "false" ]; then
@@ -349,8 +417,13 @@ do_publish() {
     log_info "Publishing version $current_version to VS Code Marketplace..."
     npx @vscode/vsce publish
 
-    log_success "Published version $current_version!"
-    log_info "Extension URL: https://marketplace.visualstudio.com/items?itemName=vibe-coder.vibe-code-guardian"
+    if [ $? -eq 0 ]; then
+        log_success "Published version $current_version!"
+        log_info "Extension URL: https://marketplace.visualstudio.com/items?itemName=vibe-coder.vibe-code-guardian"
+    else
+        log_error "Publish to VS Code Marketplace failed"
+        return 1
+    fi
 
     # Print zed information
     echo ""
