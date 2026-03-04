@@ -18,3 +18,8 @@ test-*.txt
 verify-*.sh
 DEMO-*.md
 HARD-RESET-*.md
+# Internal documentation and build files
+CLAUDE.md
+DUAL_PUBLISHING.md
+NOTIFICATION_IMPROVEMENTS.md
+test-plan/
