@@ -18,6 +18,10 @@
         "/^cd zed && git rev-parse --show-toplevel$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^vsce show vibe-coder\\.vibe-code-guardian$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }
