@@ -12,6 +12,9 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+# Zed build artifacts
+zed/target/**
+zed/Cargo.lock
 # Test files and demo scripts
 test-*.sh
 test-*.txt
@@ -22,4 +25,5 @@ HARD-RESET-*.md
 CLAUDE.md
 DUAL_PUBLISHING.md
 NOTIFICATION_IMPROVEMENTS.md
+PUBLISH-GUIDE.md
 test-plan/
