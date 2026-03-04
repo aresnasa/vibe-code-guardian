@@ -80,6 +80,8 @@ if [ $? -eq 0 ]; then
     echo "Git stash reference: $stash_ref" >> ".backup/backup.log"
 else
     log_warning "No changes to backup"
+    # Create log file anyway
+    touch ".backup/backup.log"
 fi
 
 # Show clean status after stash
