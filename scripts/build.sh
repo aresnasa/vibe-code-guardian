@@ -648,13 +648,16 @@ do_git_push() {
 # Main execution
 case "$MODE" in
     build)
+        check_hard_reset
         do_build
         ;;
     package)
+        check_hard_reset
         do_build
         do_package
         ;;
     publish)
+        check_hard_reset
         do_build
         do_package
         do_publish "$SKIP_ZED"
@@ -666,6 +669,7 @@ case "$MODE" in
         new_version=$(bump_version "$VERSION_BUMP")
         log_success "Version updated to $new_version"
 
+        check_hard_reset
         do_build
         do_package
         do_publish "$SKIP_ZED"
