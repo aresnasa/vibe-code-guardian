@@ -1,29 +1,37 @@
+# ── Source & config (bundled by esbuild) ──────────────────────
 .vscode/**
 .vscode-test/**
 out/**
 node_modules/**
 src/**
 .gitignore
+.gitmodules
 .yarnrc
 esbuild.js
-vsc-extension-quickstart.md
 **/tsconfig.json
 **/eslint.config.mjs
 **/*.map
 **/*.ts
 **/.vscode-test.*
-# Zed build artifacts
+
+# ── Documentation (only README + CHANGELOG ship) ─────────────
+docs/**
+CHANGELOG.md
+
+# ── Scripts (dev-only) ────────────────────────────────────────
+scripts/**
+
+# ── Zed extension build artifacts ────────────────────────────
 zed/target/**
-zed/Cargo.lock
-# Test files and demo scripts
-test-*.sh
+
+# ── Internal / private files ─────────────────────────────────
+.claude/**
+.github/**
+.backup/**
+Claude.md
+
+# ── Test artifacts ────────────────────────────────────────────
 test-*.txt
-verify-*.sh
-DEMO-*.md
-HARD-RESET-*.md
-# Internal documentation and build files
-CLAUDE.md
-DUAL_PUBLISHING.md
-NOTIFICATION_IMPROVEMENTS.md
-PUBLISH-GUIDE.md
-test-plan/
+
+# ── Packaged extensions (don't nest .vsix inside .vsix) ──────
+*.vsix

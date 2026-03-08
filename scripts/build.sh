@@ -1,27 +1,54 @@
 #!/bin/bash
 
-# Vibe Code Guardian - Build and Publish Script
-# This script compiles, packages, and publishes the project to VS Code Marketplace
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Vibe Code Guardian - Unified Build & Publish Script
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# This script handles the complete lifecycle:
+#   build     → compile TypeScript + verify
+#   package   → build + create .vsix
+#   publish   → build + package + publish VS Code + publish Zed + git tag
+#   full      → version bump + publish
+#
+# Zed publishing is fully automated via GitHub CLI (gh):
+#   1. Push zed submodule to aresnasa/vibe-code-guardian-zed
+#   2. Clone/update fork of zed-industries/extensions
+#   3. Update submodule pointer + extensions.toml version
+#   4. Create PR to zed-industries/extensions
+#
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-set -e  # Exit on error
+set -e
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Color codes for output
+# ── Color codes ───────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
 
-# Parse command line arguments
-MODE="${1:-build}"  # 'build' (default), 'package', or 'publish'
-VERSION_BUMP="${2:-patch}"  # 'patch', 'minor', 'major' for version bumping
-SKIP_ZED=false  # whether to skip zed extension publish
-HARD_RESET=false  # whether to perform hard reset with backup
+# ── Constants ─────────────────────────────────────────────────────────────────
+ZED_SUBMODULE_DIR="zed"
+ZED_SUBMODULE_REMOTE="https://github.com/aresnasa/vibe-code-guardian-zed.git"
+ZED_EXTENSIONS_UPSTREAM="zed-industries/extensions"
+ZED_EXTENSIONS_FORK="aresnasa/extensions"
+ZED_EXTENSION_ID="vibe-code-guardian"
+VSCODE_PUBLISHER="vibe-coder"
+WASM_TARGET="wasm32-wasip1"
 
-# Parse additional arguments (skip first 2 if they exist, otherwise skip 1)
+# ── Parse CLI arguments ──────────────────────────────────────────────────────
+MODE="${1:-build}"
+VERSION_BUMP="${2:-patch}"
+SKIP_ZED=false
+SKIP_VSCODE=false
+HARD_RESET=false
+DRY_RUN=false
+
 if [ $# -ge 2 ]; then
     shift 2
 elif [ $# -eq 1 ]; then
@@ -30,703 +57,698 @@ fi
 
 for arg in "$@"; do
     case "$arg" in
-        --skip-zed)
-            SKIP_ZED=true
-            ;;
-        --hard)
-            HARD_RESET=true
-            ;;
-        *)
-            log_warning "Unknown argument: $arg"
-            ;;
+        --skip-zed)    SKIP_ZED=true ;;
+        --skip-vscode) SKIP_VSCODE=true ;;
+        --hard)        HARD_RESET=true ;;
+        --dry-run)     DRY_RUN=true ;;
+        *)             log_warning "Unknown argument: $arg" ;;
     esac
 done
 
-# Function to print colored output
-log_info() {
-    echo -e "${BLUE}ℹ ${NC}$1"
-}
-
-log_success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
-}
-
-# Function to check if command exists
-command_exists() {
-    command -v "$1" &> /dev/null
-}
-
-# Function to create backup of current working state
-create_backup() {
-    local backup_timestamp=$(date +"%Y%m%d_%H%M%S")
-    local backup_dir=".backup/${backup_timestamp}"
-    local backup_log=".backup/backup.log"
-
-    mkdir -p ".backup"
-
-    # Log backup operation
-    echo "Backup created at: $(date)" >> "$backup_log"
-    echo "Backup directory: $backup_dir" >> "$backup_log"
-
-    # Stash current changes
-    log_info "Stashing current changes..."
-    git stash push -u -m "Auto-backup before hard reset at ${backup_timestamp}" --include-untracked
-
-    if [ $? -eq 0 ]; then
-        local stash_ref=$(git stash list -n 1 --format="%H")
-        echo "Git stash reference: $stash_ref" >> "$backup_log"
-
-        # Create backup directory structure
-        mkdir -p "$backup_dir"
-
-        # Copy important files to backup
-        cp package.json "$backup_dir/" 2>/dev/null || true
-        cp README.md "$backup_dir/" 2>/dev/null || true
-
-        # Save the current git state info
-        git rev-parse HEAD > "$backup_dir/git_head.txt"
-        git rev-parse --abbrev-ref HEAD > "$backup_dir/git_branch.txt"
-        git log --oneline -1 > "$backup_dir/git_commit.txt"
-
-        log_success "Backup created successfully!"
-        log_info "Backup location: $backup_dir"
-        log_info "Stash reference: $stash_ref"
-        return 0
-    else
-        log_warning "No changes to backup (working directory clean)"
-        return 1
-    fi
-}
-
-# Function to list available backups
-list_backups() {
-    local backup_log=".backup/backup.log"
-
-    if [ ! -f "$backup_log" ]; then
-        log_info "No backups found"
-        return 1
-    fi
-
+# ── Logging helpers ───────────────────────────────────────────────────────────
+log_info()    { echo -e "${BLUE}ℹ ${NC}$1"; }
+log_success() { echo -e "${GREEN}✓${NC} $1"; }
+log_error()   { echo -e "${RED}✗${NC} $1"; }
+log_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+log_step()    { echo -e "\n${CYAN}${BOLD}▸ $1${NC}"; }
+log_banner()  {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Available Backups"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    cat "$backup_log"
-
-    # List stashes
-    echo ""
-    log_info "Git Stashes:"
-    git stash list
-
-    echo ""
-    echo "To restore a backup:"
-    echo "  1. Restore git stash: git stash pop <stash_reference>"
-    echo "  2. Or restore from backup directory"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e " ${BOLD}$1${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
-# Function to restore from backup
-restore_backup() {
-    local backup_timestamp="$1"
+# ── Utility ───────────────────────────────────────────────────────────────────
+command_exists() { command -v "$1" &>/dev/null; }
 
-    if [ -z "$backup_timestamp" ]; then
-        log_error "Please provide a backup timestamp"
-        return 1
-    fi
-
-    local backup_dir=".backup/${backup_timestamp}"
-
-    if [ ! -d "$backup_dir" ]; then
-        log_error "Backup not found: $backup_dir"
-        return 1
-    fi
-
-    log_info "Restoring from backup: $backup_timestamp"
-
-    # Read the git head and reset
-    if [ -f "$backup_dir/git_head.txt" ]; then
-        local git_head=$(cat "$backup_dir/git_head.txt")
-        log_info "Resetting to git commit: $git_head"
-        git reset --hard "$git_head"
-    fi
-
-    log_success "Backup restored successfully!"
-    log_info "You may need to manually restore any uncommitted files from the backup directory"
-}
-
-# Function to check if hard reset is needed and perform backup
-check_hard_reset() {
-    if [ "$HARD_RESET" = "true" ]; then
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        log_warning "Hard reset mode requested (--hard flag)"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        log_info "This will:"
-        echo "  • Reset the working directory to clean state"
-        echo "  • Remove all uncommitted changes"
-        echo "  • Remove untracked files"
-        echo ""
-
-        # Check if there are changes to backup
-        if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-            log_info "Changes detected. Creating backup before hard reset..."
-            create_backup
-
-            if [ $? -eq 0 ]; then
-                echo ""
-                read -p "Do you want to proceed with hard reset? (y/n): " -n 1 -r
-                echo
-                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                    log_info "Hard reset cancelled"
-                    exit 0
-                fi
-            fi
-        else
-            log_info "No changes to backup"
-            read -p "Do you want to proceed with hard reset? (y/n): " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                log_info "Hard reset cancelled"
-                exit 0
-            fi
-        fi
-
-        # Perform hard reset
-        log_info "Performing hard reset..."
-        git reset --hard HEAD
-        git clean -fd
-
-        log_success "Hard reset completed!"
-        echo ""
-    fi
-}
-
-# Ensure zed repo ignores local build artifacts
-ensure_zed_ignore_rules() {
-    local zed_ignore_file="zed/.gitignore"
-    local changed=0
-
-    if [ ! -f "$zed_ignore_file" ]; then
-        cat > "$zed_ignore_file" <<'EOF'
-target/
-Cargo.lock
-EOF
-        changed=1
-    else
-        if ! grep -qx 'target/' "$zed_ignore_file"; then
-            echo "target/" >> "$zed_ignore_file"
-            changed=1
-        fi
-        if ! grep -qx 'Cargo.lock' "$zed_ignore_file"; then
-            echo "Cargo.lock" >> "$zed_ignore_file"
-            changed=1
-        fi
-    fi
-
-    return $changed
-}
-
-# Publish zed extension to crates.io
-publish_zed_to_crates_io() {
-    local release_version="$1"
-
-    if [ ! -d "zed" ]; then
-        log_warning "zed directory not found, skipping zed publish"
-        return 0
-    fi
-
-    log_info "Publishing zed extension to crates.io..."
-
-    pushd zed > /dev/null
-
-    # Check if cargo is installed
-    if ! command_exists cargo; then
-        log_error "cargo is not installed. Cannot publish zed extension."
-        popd > /dev/null
-        return 1
-    fi
-
-    # Update version in extension.toml to match main project
-    sed -i '' "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${release_version}\"/" extension.toml
-
-    # Update version in Cargo.toml to match main project
-    sed -i '' "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${release_version}\"/" Cargo.toml
-
-    # Commit version updates before building
-    git add extension.toml Cargo.toml
-    git commit -m "chore: bump version to ${release_version}"
-
-    log_info "Building zed extension..."
-    cargo build --release
-
-    if [ $? -ne 0 ]; then
-        log_error "Zed extension build failed"
-        popd > /dev/null
-        return 1
-    fi
-
-    # Check if user wants to publish to crates.io
-    if command -v cargo &> /dev/null; then
-        log_info "Publishing to crates.io..."
-
-        # Check if there are any uncommitted changes before publishing
-        if ! git diff --quiet || ! git diff --cached --quiet; then
-            log_warning "There are uncommitted changes. Adding and committing..."
-            git add -A
-            git commit -m "chore: final changes before publishing"
-        fi
-
-        cargo publish
-
-        if [ $? -eq 0 ]; then
-            log_success "Zed extension published to crates.io!"
-            log_info "Package URL: https://crates.io/crates/vibe-code-guardian"
-        else
-            log_warning "Zed extension publish to crates.io failed or was aborted"
-            popd > /dev/null
-            return 1
-        fi
-    else
-        log_warning "Skipping zed publish (cargo not available)"
-    fi
-
-    # Push the version commit
-    log_info "Pushing zed version commit..."
-    git push
-
-    popd > /dev/null
-    return 0
-}
-
-# Commit and push zed submodule repository first, then return to root
-sync_zed_submodule() {
-    local release_version="$1"
-
-    if [ ! -d "zed" ]; then
-        log_warning "zed directory not found, skipping zed sync"
-        return 0
-    fi
-
-    if [ ! -d "zed/.git" ] && [ ! -f "zed/.git" ]; then
-        log_warning "zed is not a git repository, skipping zed sync"
-        return 0
-    fi
-
-    log_info "Syncing zed repository..."
-    ensure_zed_ignore_rules || true
-
-    pushd zed > /dev/null
-
-    local zed_branch
-    zed_branch=$(git rev-parse --abbrev-ref HEAD)
-
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        log_info "Staging zed changes..."
-        git add -A
-        log_info "Committing zed changes..."
-        git commit -m "chore: sync zed for release v${release_version}"
-    else
-        log_success "No zed changes to commit"
-    fi
-
-    log_info "Pushing zed (${zed_branch})..."
-    git push origin "$zed_branch"
-
-    local zed_head
-    zed_head=$(git rev-parse --short HEAD)
-    popd > /dev/null
-
-    git add zed .gitmodules 2>/dev/null || true
-    log_success "zed synced at ${zed_head}"
-}
-
-# Function to get current version from package.json
 get_version() {
     grep '"version"' package.json | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/'
 }
 
-# Function to bump version in package.json
 bump_version() {
-    local current_version=$(get_version)
+    local current_version
+    current_version=$(get_version)
     local new_version=""
-    
+
     case "$1" in
-        patch)
-            new_version=$(echo "$current_version" | awk -F. '{$NF++;print}' OFS=.)
-            ;;
-        minor)
-            new_version=$(echo "$current_version" | awk -F. '{$(NF-1)++;$NF=0;print}' OFS=.)
-            ;;
-        major)
-            new_version=$(echo "$current_version" | awk -F. '{$1++;$2=0;$NF=0;print}' OFS=.)
-            ;;
-        *)
-            log_error "Unknown version bump type: $1"
-            return 1
-            ;;
+        patch) new_version=$(echo "$current_version" | awk -F. '{$NF++;print}' OFS=.) ;;
+        minor) new_version=$(echo "$current_version" | awk -F. '{$(NF-1)++;$NF=0;print}' OFS=.) ;;
+        major) new_version=$(echo "$current_version" | awk -F. '{$1++;$2=0;$NF=0;print}' OFS=.) ;;
+        *)     log_error "Unknown version bump type: $1"; return 1 ;;
     esac
-    
+
     sed -i '' "s/\"version\": \"$current_version\"/\"version\": \"$new_version\"/" package.json
     echo "$new_version"
 }
 
-# Function to perform the build
+# ── Preflight checks ─────────────────────────────────────────────────────────
+preflight_check() {
+    local target="$1"  # build | package | publish
+    local missing=()
+
+    command_exists node || missing+=("node")
+    command_exists npm  || missing+=("npm")
+    command_exists git  || missing+=("git")
+
+    if [[ "$target" == "package" || "$target" == "publish" ]]; then
+        command_exists npx || missing+=("npx")
+    fi
+
+    if [[ "$target" == "publish" ]]; then
+        if [ "$SKIP_ZED" = "false" ]; then
+            command_exists gh    || missing+=("gh (GitHub CLI)")
+            command_exists cargo || missing+=("cargo (Rust toolchain)")
+        fi
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        log_error "Missing required tools: ${missing[*]}"
+        echo "  Install them before continuing."
+        return 1
+    fi
+
+    log_success "All required tools available"
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BACKUP & HARD RESET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+create_backup() {
+    local ts
+    ts=$(date +"%Y%m%d_%H%M%S")
+    local backup_dir=".backup/${ts}"
+    mkdir -p "$backup_dir"
+
+    log_info "Creating backup → .backup/${ts}"
+    git stash push -u -m "Auto-backup before hard reset at ${ts}" --include-untracked 2>/dev/null || true
+
+    git rev-parse HEAD > "$backup_dir/git_head.txt"
+    git rev-parse --abbrev-ref HEAD > "$backup_dir/git_branch.txt"
+    git log --oneline -1 > "$backup_dir/git_commit.txt"
+    cp package.json "$backup_dir/" 2>/dev/null || true
+
+    echo "$(date) | ${ts} | $(git rev-parse --short HEAD)" >> ".backup/backup.log"
+    log_success "Backup saved to .backup/${ts}"
+}
+
+check_hard_reset() {
+    [ "$HARD_RESET" != "true" ] && return 0
+
+    log_banner "⚠  Hard Reset Mode"
+    log_info "This will reset the working directory to a clean state."
+
+    if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+        create_backup
+    fi
+
+    read -p "Proceed with hard reset? (y/n): " -n 1 -r
+    echo
+    [[ ! $REPLY =~ ^[Yy]$ ]] && { log_info "Cancelled."; exit 0; }
+
+    git reset --hard HEAD
+    git clean -fd
+    log_success "Hard reset completed"
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# BUILD
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 do_build() {
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Building Vibe Code Guardian..."
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_banner "🔨 Building Vibe Code Guardian"
 
-    # Check Node.js installation
-    log_info "Checking Node.js..."
-    if ! command_exists node; then
-        log_error "Node.js is not installed"
-        return 1
-    fi
-    log_success "Node.js version: $(node --version)"
+    log_step "Checking environment"
+    log_success "Node $(node --version)  •  npm $(npm --version)"
 
-    # Check npm installation
-    log_info "Checking npm..."
-    if ! command_exists npm; then
-        log_error "npm is not installed"
-        return 1
-    fi
-    log_success "npm version: $(npm --version)"
-
-    # Install dependencies if needed
     if [ ! -d "node_modules" ]; then
-        log_info "Installing dependencies..."
+        log_step "Installing dependencies"
         npm install
-    else
-        log_success "Dependencies already installed"
     fi
 
-    # Type checking
-    log_info "Type checking..."
+    log_step "Type checking"
     npm run check-types
 
-    # Linting
-    log_info "Running linter..."
+    log_step "Linting"
     npm run lint
 
-    # Build with esbuild
-    log_info "Bundling with esbuild..."
+    log_step "Bundling with esbuild"
     node esbuild.js
 
-    # Verify output
-    log_info "Verifying build..."
     if [ -f "dist/extension.js" ]; then
-        local size=$(du -h dist/extension.js | cut -f1)
-        log_success "dist/extension.js - OK ($size)"
+        local size
+        size=$(du -h dist/extension.js | cut -f1)
+        log_success "dist/extension.js (${size})"
     else
         log_error "Build output not found: dist/extension.js"
         return 1
     fi
 
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_success "Build completed successfully!"
+    log_success "Build completed"
 }
 
-# Function to perform packaging
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PACKAGE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 do_package() {
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Packaging extension..."
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_banner "📦 Packaging VS Code Extension"
 
-    if ! command_exists vsce; then
-        log_info "Installing @vscode/vsce..."
-        npm install -g @vscode/vsce
-    fi
+    local version
+    version=$(get_version)
+    local vsix="vibe-code-guardian-${version}.vsix"
 
-    local current_version=$(get_version)
-    local vsix_file="vibe-code-guardian-${current_version}.vsix"
-
-    log_info "Creating package: $vsix_file"
+    log_step "Creating ${vsix}"
     npx @vscode/vsce package
 
-    if [ -f "$vsix_file" ]; then
-        local size=$(du -h "$vsix_file" | cut -f1)
-        log_success "Package created: $vsix_file ($size)"
+    if [ -f "$vsix" ]; then
+        local size
+        size=$(du -h "$vsix" | cut -f1)
+        log_success "Package created: ${vsix} (${size})"
     else
         log_error "Package creation failed"
         return 1
     fi
-
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
-# Function to check if VSCE is authenticated
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# VS CODE MARKETPLACE PUBLISH
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 check_vsce_auth() {
-    # Check if VSCE_PAT environment variable is set
     if [ -n "$VSCE_PAT" ]; then
-        log_info "Using VSCE_PAT environment variable for authentication"
+        log_info "Using VSCE_PAT environment variable"
         return 0
     fi
-
-    # Check if already logged in
-    if vsce whoami &>/dev/null; then
-        log_success "Already authenticated with VSCE"
+    if npx @vscode/vsce verify-pat "$VSCODE_PUBLISHER" &>/dev/null; then
+        log_success "Already authenticated with VS Code Marketplace"
         return 0
     fi
-
     return 1
 }
 
-# Function to handle VSCE authentication
 handle_vsce_auth() {
-    log_info "Authentication required for VS Code Marketplace publishing"
+    log_info "Authentication required for VS Code Marketplace"
     echo ""
-    echo "To publish to VS Code Marketplace, you need to provide a Personal Access Token (PAT)"
-    echo ""
-    echo "1. Go to: https://marketplace.visualstudio.com/manage/publishers/vibe-coder"
-    echo "2. Create a new PAT with 'Marketplace publish' permission"
-    echo "3. Set the token using one of these methods:"
-    echo "   a) Export environment variable: export VSCE_PAT='your_token_here'"
-    echo "   b) Run: vsce login vibe-coder (then enter your token)"
+    echo "  1. Visit: https://marketplace.visualstudio.com/manage/publishers/${VSCODE_PUBLISHER}"
+    echo "  2. Create a PAT with 'Marketplace → Manage' scope"
+    echo "  3. Set: export VSCE_PAT='your_token'"
     echo ""
 
-    # Check if VSCE_PAT is set
     if [ -z "$VSCE_PAT" ]; then
-        read -p "Do you have a PAT ready? (y/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            read -p "Enter your PAT: " -r vsce_token
-            VSCE_PAT="$vsce_token"
-            export VSCE_PAT
-            log_info "PAT set for this session"
-        else
-            log_error "Authentication required. Please obtain a PAT and try again."
-            return 1
-        fi
+        read -p "Enter your PAT (or Ctrl+C to cancel): " -r vsce_token
+        [ -z "$vsce_token" ] && { log_error "No PAT provided"; return 1; }
+        export VSCE_PAT="$vsce_token"
     fi
 
-    # Try to authenticate
-    if [ -n "$VSCE_PAT" ]; then
-        echo "$VSCE_PAT" | npx @vscode/vsce login vibe-coder --pat
-        if [ $? -eq 0 ]; then
-            log_success "Authentication successful!"
-            return 0
-        else
-            log_error "Authentication failed. Please check your PAT."
-            return 1
-        fi
-    fi
-
-    return 1
+    echo "$VSCE_PAT" | npx @vscode/vsce login "$VSCODE_PUBLISHER" --pat
+    log_success "Authentication successful"
 }
 
-# Function to perform publishing
-do_publish() {
-    local skip_zed="${2:-false}"
+publish_vscode() {
+    local version="$1"
 
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Publishing to VS Code Marketplace..."
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_banner "🟣 Publishing to VS Code Marketplace"
 
-    if ! command_exists vsce; then
-        log_info "Installing @vscode/vsce..."
-        npm install -g @vscode/vsce
-    fi
-
-    local current_version=$(get_version)
-
-    # Check and handle authentication
     if ! check_vsce_auth; then
         if ! handle_vsce_auth; then
-            log_error "Cannot proceed without authentication"
+            log_error "Cannot publish without authentication"
             return 1
         fi
     fi
 
-    # Publish zed extension first
-    if [ "$skip_zed" = "false" ]; then
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        log_info "Publishing Zed extension..."
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        publish_zed_to_crates_io "$current_version"
+    log_step "Publishing v${version}"
 
-        if [ $? -ne 0 ]; then
-            log_warning "Zed extension publish failed, but continuing with VS Code publish"
-        fi
-    else
-        log_info "Skipping Zed extension publish (--skip-zed flag provided)"
+    if [ "$DRY_RUN" = "true" ]; then
+        log_warning "[DRY RUN] Would run: npx @vscode/vsce publish"
+        return 0
     fi
 
-    log_info "Publishing version $current_version to VS Code Marketplace..."
     npx @vscode/vsce publish
 
-    if [ $? -eq 0 ]; then
-        log_success "Published version $current_version!"
-        log_info "Extension URL: https://marketplace.visualstudio.com/items?itemName=vibe-coder.vibe-code-guardian"
-    else
-        log_error "Publish to VS Code Marketplace failed"
-        return 1
-    fi
-
-    # Print zed information
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Zed Extension Info"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "To install in Zed, add to your settings.json:"
-    echo "  \"extensions\": {"
-    echo "    \"vibe-code-guardian\": {"
-    echo "      \"version\": \"${current_version}\""
-    echo "    }"
-    echo "  }"
-    log_info "Or run: zed extensions install vibe-code-guardian"
-    echo ""
+    log_success "Published v${version} to VS Code Marketplace"
+    log_info "URL: https://marketplace.visualstudio.com/items?itemName=${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}"
 }
 
-# Function to push to git
-do_git_push() {
-    local create_tag="${1:-true}"  # Create git tag by default
-    local release_type="${2:-false}"  # Whether this is a release (publish/full)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ZED EXTENSION PUBLISH (full automation via gh CLI)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Pushing to GitHub..."
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Step 1: Update version in zed submodule and push to its remote
+zed_update_submodule() {
+    local version="$1"
 
-    if ! command_exists git; then
-        log_error "Git is not installed"
+    log_step "Updating zed submodule → v${version}"
+
+    if [ ! -d "$ZED_SUBMODULE_DIR" ]; then
+        log_warning "zed/ directory not found – skipping"
         return 1
     fi
 
-    local current_version=$(get_version)
+    pushd "$ZED_SUBMODULE_DIR" > /dev/null
 
-    # Sync zed first so main repo can include the latest submodule pointer
-    sync_zed_submodule "$current_version"
+    # Update version in extension.toml & Cargo.toml
+    sed -i '' "s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${version}\"/" extension.toml
+    sed -i '' "0,/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/{s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${version}\"/;}" Cargo.toml
 
-    # Check if there are changes to commit
-    if git diff --quiet && git diff --cached --quiet; then
-        log_warning "No changes to commit"
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        git add extension.toml Cargo.toml
+        git commit -m "chore: bump version to ${version}"
+        log_success "Zed submodule version bumped to ${version}"
     else
-        log_info "Staging changes..."
-        git add .
+        log_success "Zed submodule already at v${version}"
+    fi
 
-        log_info "Committing changes..."
+    popd > /dev/null
+}
 
-        if [ "$release_type" = "true" ]; then
-            git commit -m "🚀 Release v${current_version}"
+# Step 2: Build the Zed extension as wasm32-wasip1 to verify compilation
+zed_build_wasm() {
+    log_step "Building Zed extension (wasm32-wasip1)"
+
+    pushd "$ZED_SUBMODULE_DIR" > /dev/null
+
+    # Ensure the wasm target is installed
+    if ! rustup target list --installed | grep -q "$WASM_TARGET"; then
+        log_info "Installing ${WASM_TARGET} target..."
+        rustup target add "$WASM_TARGET"
+    fi
+
+    cargo build --target "$WASM_TARGET" --release 2>&1
+    log_success "Zed extension compiled to wasm successfully"
+
+    popd > /dev/null
+}
+
+# Step 3: Push zed submodule to its own GitHub repo
+zed_push_submodule() {
+    log_step "Pushing zed submodule to GitHub"
+
+    pushd "$ZED_SUBMODULE_DIR" > /dev/null
+
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+
+    if [ "$DRY_RUN" = "true" ]; then
+        log_warning "[DRY RUN] Would push to origin/${branch}"
+    else
+        git push origin "$branch"
+    fi
+
+    local commit
+    commit=$(git rev-parse --short HEAD)
+    log_success "Pushed zed submodule (${commit}) to origin/${branch}"
+
+    popd > /dev/null
+
+    # Update parent repo's submodule pointer
+    git add "$ZED_SUBMODULE_DIR"
+}
+
+# Step 4: Clone fork, update submodule pointer + extensions.toml, create PR
+zed_create_pr() {
+    local version="$1"
+    local work_dir
+    work_dir=$(mktemp -d)
+    local pr_branch="update-${ZED_EXTENSION_ID}-v${version}"
+
+    log_step "Preparing PR to ${ZED_EXTENSIONS_UPSTREAM}"
+
+    # ── Ensure the fork exists ────────────────────────────────────────────
+    if ! gh repo view "$ZED_EXTENSIONS_FORK" --json name &>/dev/null; then
+        log_info "Fork not found. Forking ${ZED_EXTENSIONS_UPSTREAM}..."
+        gh repo fork "$ZED_EXTENSIONS_UPSTREAM" --clone=false
+    fi
+
+    # ── Clone the fork ────────────────────────────────────────────────────
+    log_info "Cloning fork → ${work_dir}/extensions"
+    gh repo clone "$ZED_EXTENSIONS_FORK" "${work_dir}/extensions" -- --depth=1 2>&1
+
+    pushd "${work_dir}/extensions" > /dev/null
+
+    # Set upstream
+    git remote add upstream "https://github.com/${ZED_EXTENSIONS_UPSTREAM}.git" 2>/dev/null || true
+    git fetch upstream main --depth=1
+    git reset --hard upstream/main
+
+    # ── Create branch ─────────────────────────────────────────────────────
+    git checkout -b "$pr_branch"
+
+    # ── Check if submodule already exists ─────────────────────────────────
+    if [ -d "extensions/${ZED_EXTENSION_ID}" ]; then
+        log_info "Submodule already exists – updating pointer"
+        git submodule update --init "extensions/${ZED_EXTENSION_ID}" 2>/dev/null || true
+
+        pushd "extensions/${ZED_EXTENSION_ID}" > /dev/null
+        git fetch origin
+        git checkout origin/main
+        popd > /dev/null
+
+        git add "extensions/${ZED_EXTENSION_ID}"
+    else
+        log_info "Adding submodule for the first time"
+        git submodule add "$ZED_SUBMODULE_REMOTE" "extensions/${ZED_EXTENSION_ID}"
+        git add "extensions/${ZED_EXTENSION_ID}"
+    fi
+
+    # ── Update extensions.toml ────────────────────────────────────────────
+    if grep -q "^\[${ZED_EXTENSION_ID}\]" extensions.toml; then
+        # Update existing entry version
+        log_info "Updating version in extensions.toml"
+        # Use perl for reliable multi-line TOML section editing
+        perl -i -0pe "s/(\[${ZED_EXTENSION_ID}\]\s*\n(?:(?!\[)[^\n]*\n)*?version\s*=\s*)\"[^\"]*\"/\1\"${version}\"/" extensions.toml
+    else
+        # Insert new entry in alphabetical order (before [vibescript])
+        log_info "Adding new entry to extensions.toml"
+        local entry
+        entry=$(printf '[%s]\nsubmodule = "extensions/%s"\nversion = "%s"\n' \
+            "$ZED_EXTENSION_ID" "$ZED_EXTENSION_ID" "$version")
+
+        # Find the right insertion point: the first [section] that sorts after our ID
+        local insert_before=""
+        while IFS= read -r section; do
+            if [[ "$section" > "[$ZED_EXTENSION_ID]" ]]; then
+                insert_before="$section"
+                break
+            fi
+        done < <(grep '^\[' extensions.toml | sort)
+
+        if [ -n "$insert_before" ]; then
+            # Escape brackets for sed
+            local escaped
+            escaped=$(echo "$insert_before" | sed 's/\[/\\[/g; s/\]/\\]/g')
+            sed -i '' "/${escaped}/i\\
+\\
+${entry//\\/\\\\}
+" extensions.toml
         else
-            git commit -m "📦 Build v${current_version}"
+            # Append at end
+            printf '\n%s\n' "$entry" >> extensions.toml
         fi
     fi
 
-    # Only create git tags for releases, not for regular builds
-    if [ "$create_tag" = "true" ] && [ "$release_type" = "true" ]; then
-        log_info "Creating git tag for release..."
-        git tag "v${current_version}" 2>/dev/null || log_warning "Tag v${current_version} already exists"
+    git add extensions.toml
 
-        log_info "Pushing to remote..."
-        git push origin main
-        git push origin "v${current_version}" 2>/dev/null || log_warning "Tag push skipped"
-    elif [ "$create_tag" = "true" ]; then
-        # Just push without tag for regular builds
-        log_info "Pushing to remote..."
-        git push origin main
-    else
-        # Don't push for non-release operations
-        log_info "Git changes committed, but not pushed (not a release)"
+    # ── Sort extensions (if pnpm available) ───────────────────────────────
+    if command_exists pnpm; then
+        log_info "Running pnpm sort-extensions"
+        pnpm install --frozen-lockfile 2>/dev/null || pnpm install 2>/dev/null || true
+        pnpm sort-extensions 2>/dev/null || true
+        git add extensions.toml .gitmodules 2>/dev/null || true
     fi
 
-    log_success "GitHub operations completed!"
+    # ── Commit & push ─────────────────────────────────────────────────────
+    if git diff --cached --quiet; then
+        log_warning "No changes to commit – PR may already be up to date"
+        popd > /dev/null
+        rm -rf "$work_dir"
+        return 0
+    fi
+
+    git commit -m "Update ${ZED_EXTENSION_ID} to v${version}"
+
+    if [ "$DRY_RUN" = "true" ]; then
+        log_warning "[DRY RUN] Would push branch and create PR"
+        popd > /dev/null
+        rm -rf "$work_dir"
+        return 0
+    fi
+
+    git push origin "$pr_branch" --force
+
+    # ── Create PR via gh CLI ──────────────────────────────────────────────
+    local pr_url
+    pr_url=$(gh pr create \
+        --repo "$ZED_EXTENSIONS_UPSTREAM" \
+        --base main \
+        --head "aresnasa:${pr_branch}" \
+        --title "Update ${ZED_EXTENSION_ID} to v${version}" \
+        --body "## Update Vibe Code Guardian Extension
+
+**Extension ID:** \`${ZED_EXTENSION_ID}\`
+**Version:** \`${version}\`
+**Repository:** ${ZED_SUBMODULE_REMOTE%.git}
+**License:** MIT
+
+### Description
+
+A game-like checkpoint/save system for AI-assisted coding (vibe coding).
+
+### Changes
+
+- Updated extension to v${version}
+- Submodule pointer updated to latest commit
+
+### Checklist
+
+- [x] Extension repository uses HTTPS URL
+- [x] \`extension.toml\` has required fields
+- [x] MIT license included
+- [x] Extension compiles to wasm32-wasip1
+- [x] \`extensions.toml\` version matches \`extension.toml\`
+- [x] Extension ID does not contain \"zed\"" 2>&1)
+
+    log_success "PR created: ${pr_url}"
+
+    popd > /dev/null
+    rm -rf "$work_dir"
+
+    echo ""
+    log_info "PR URL: ${pr_url}"
+    log_info "Once merged, users can install via Zed Extensions panel."
 }
 
-# Main execution
+# Orchestrate all Zed publish steps
+publish_zed() {
+    local version="$1"
+
+    log_banner "🔵 Publishing Zed Extension to zed.dev"
+
+    zed_update_submodule "$version"
+    zed_build_wasm
+    zed_push_submodule
+    zed_create_pr "$version"
+
+    log_success "Zed extension publish flow completed"
+    log_info "Extension page: https://zed.dev/extensions?query=${ZED_EXTENSION_ID}"
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# GIT SYNC & TAG
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+sync_zed_submodule() {
+    local version="$1"
+
+    [ ! -d "$ZED_SUBMODULE_DIR" ] && return 0
+    [ ! -d "$ZED_SUBMODULE_DIR/.git" ] && [ ! -f "$ZED_SUBMODULE_DIR/.git" ] && return 0
+
+    log_step "Syncing zed submodule"
+
+    pushd "$ZED_SUBMODULE_DIR" > /dev/null
+
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        git add -A
+        git commit -m "chore: sync zed for release v${version}"
+    fi
+
+    git push origin "$branch" 2>/dev/null || true
+
+    local head
+    head=$(git rev-parse --short HEAD)
+
+    popd > /dev/null
+
+    git add "$ZED_SUBMODULE_DIR" .gitmodules 2>/dev/null || true
+    log_success "Zed submodule synced at ${head}"
+}
+
+do_git_push() {
+    local is_release="$1"  # true | false
+    local version
+    version=$(get_version)
+
+    log_banner "🔀 Git Push"
+
+    sync_zed_submodule "$version"
+
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        git add .
+        if [ "$is_release" = "true" ]; then
+            git commit -m "🚀 Release v${version}"
+        else
+            git commit -m "📦 Build v${version}"
+        fi
+    else
+        log_info "No changes to commit"
+    fi
+
+    if [ "$is_release" = "true" ]; then
+        git tag "v${version}" 2>/dev/null || log_warning "Tag v${version} already exists"
+
+        if [ "$DRY_RUN" = "true" ]; then
+            log_warning "[DRY RUN] Would push to origin/main + tag v${version}"
+        else
+            git push origin main
+            git push origin "v${version}" 2>/dev/null || log_warning "Tag push skipped (already exists)"
+        fi
+    else
+        if [ "$DRY_RUN" = "true" ]; then
+            log_warning "[DRY RUN] Would push to origin/main"
+        else
+            git push origin main
+        fi
+    fi
+
+    log_success "Git operations completed"
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# FULL PUBLISH ORCHESTRATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+do_publish() {
+    local version
+    version=$(get_version)
+
+    log_banner "🚀 Publishing Vibe Code Guardian v${version}"
+
+    # ── Zed publish ───────────────────────────────────────────────────────
+    if [ "$SKIP_ZED" = "false" ]; then
+        publish_zed "$version" || {
+            log_warning "Zed publish encountered issues – continuing with VS Code"
+        }
+    else
+        log_info "Skipping Zed publish (--skip-zed)"
+    fi
+
+    # ── VS Code publish ───────────────────────────────────────────────────
+    if [ "$SKIP_VSCODE" = "false" ]; then
+        publish_vscode "$version" || {
+            log_error "VS Code Marketplace publish failed"
+            return 1
+        }
+    else
+        log_info "Skipping VS Code publish (--skip-vscode)"
+    fi
+
+    # ── Summary ───────────────────────────────────────────────────────────
+    log_banner "✅ Publish Summary"
+    echo ""
+    log_info "Version: ${version}"
+    [ "$SKIP_VSCODE" = "false" ] && \
+        log_info "VS Code: https://marketplace.visualstudio.com/items?itemName=${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}"
+    [ "$SKIP_ZED" = "false" ] && \
+        log_info "Zed:     https://zed.dev/extensions?query=${ZED_EXTENSION_ID}"
+    echo ""
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# USAGE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+show_usage() {
+    cat <<'EOF'
+
+  Vibe Code Guardian – Build & Publish
+
+  Usage:
+    ./scripts/build.sh <mode> [version-bump] [options]
+
+  Modes:
+    build       Compile TypeScript, type-check, lint, bundle
+    package     build + create .vsix package
+    publish     build + package + publish VS Code + Zed + git tag
+    full        Version bump + publish (complete release)
+
+  Version bump (for 'full' mode):
+    patch       0.6.0 → 0.6.1
+    minor       0.6.0 → 0.7.0
+    major       0.6.0 → 1.0.0
+
+  Options:
+    --skip-zed      Skip Zed extension publishing
+    --skip-vscode   Skip VS Code Marketplace publishing
+    --hard          Hard reset with auto-backup before build
+    --dry-run       Simulate publish without pushing/uploading
+
+  Environment:
+    VSCE_PAT        VS Code Marketplace Personal Access Token
+
+  Examples:
+    ./scripts/build.sh build
+    ./scripts/build.sh package
+    ./scripts/build.sh publish
+    ./scripts/build.sh publish --skip-zed
+    ./scripts/build.sh publish --dry-run
+    ./scripts/build.sh full patch
+    ./scripts/build.sh full minor --skip-zed
+    ./scripts/build.sh build --hard
+
+  Zed Publishing (automated):
+    The script uses GitHub CLI (gh) to:
+      1. Push zed submodule to aresnasa/vibe-code-guardian-zed
+      2. Update the zed-industries/extensions fork
+      3. Create a PR automatically
+    Requires: gh auth login
+
+EOF
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MAIN
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 case "$MODE" in
     build)
+        preflight_check build
         check_hard_reset
         do_build
         ;;
+
     package)
+        preflight_check package
         check_hard_reset
         do_build
         do_package
         ;;
+
     publish)
+        preflight_check publish
         check_hard_reset
         do_build
         do_package
-        do_publish "$SKIP_ZED"
-        do_git_push true true  # create tag, this is a release
+        do_publish
+        do_git_push true   # is_release=true
         ;;
+
     full)
-        # Full release with version bump
-        log_warning "Bumping $VERSION_BUMP version..."
+        preflight_check publish
+        log_step "Bumping ${VERSION_BUMP} version"
         new_version=$(bump_version "$VERSION_BUMP")
-        log_success "Version updated to $new_version"
+        log_success "Version → ${new_version}"
 
         check_hard_reset
         do_build
         do_package
-        do_publish "$SKIP_ZED"
-        do_git_push true true  # create tag, this is a release
+        do_publish
+        do_git_push true   # is_release=true
         ;;
+
+    help|--help|-h)
+        show_usage
+        exit 0
+        ;;
+
     *)
-        log_error "Unknown mode: $MODE"
-        echo ""
-        echo "Usage: $0 [mode] [version-bump] [options]"
-        echo ""
-        echo "Modes:"
-        echo "  build      - Compile and verify the project (no git tag or push)"
-        echo "  package    - Build and create .vsix package (no git tag or push)"
-        echo "  publish    - Full release: build, package, publish to VS Code + Zed, create git tag"
-        echo "  full       - Full release with version bump (same as publish + version bump)"
-        echo ""
-        echo "Version bump (for 'full' mode):"
-        echo "  patch      - Bump patch version (0.1.5 → 0.1.6)"
-        echo "  minor      - Bump minor version (0.1.5 → 0.2.0)"
-        echo "  major      - Bump major version (0.1.5 → 1.0.0)"
-        echo ""
-        echo "Options:"
-        echo "  --skip-zed  Skip publishing Zed extension to crates.io"
-        echo "  --hard      Perform hard reset with automatic backup before build"
-        echo "              Creates backup of uncommitted changes, then resets working dir"
-        echo ""
-        echo "Hard Reset & Backup:"
-        echo "  • Automatically backs up uncommitted changes using git stash"
-        echo "  • Creates backup in .backup/ directory with timestamp"
-        echo "  • Prompts for confirmation before proceeding"
-        echo "  • Use 'git stash list' to see available backups"
-        echo ""
-        echo "Authentication:"
-        echo "  VS Code Marketplace publishing requires a Personal Access Token (PAT)"
-        echo "  • Set environment variable: export VSCE_PAT='your_token_here'"
-        echo "  • Or the script will prompt you for the token during publish"
-        echo ""
-        echo "Git Tag Behavior:"
-        echo "  • build/package: No git tags created"
-        echo "  • publish/full: Git tags created for releases only"
-        echo ""
-        echo "Examples:"
-        echo "  ./scripts/build.sh build"
-        echo "  ./scripts/build.sh package"
-        echo "  ./scripts/build.sh publish"
-        echo "  ./scripts/build.sh publish --skip-zed"
-        echo "  ./scripts/build.sh build --hard"
-        echo "  ./scripts/build.sh full minor"
+        log_error "Unknown mode: ${MODE}"
+        show_usage
         exit 1
         ;;
 esac
 
-if [ $? -eq 0 ]; then
-    echo ""
-    log_success "All done! 🎉"
-else
-    log_error "Build/publish failed!"
-    exit 1
-fi
-
+echo ""
+log_success "All done! 🎉"

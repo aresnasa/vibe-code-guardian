@@ -1,8 +1,17 @@
-out
-dist
-node_modules
+# Build output
+out/
+dist/
+node_modules/
 .vscode-test/
+
+# Packaged extensions
 *.vsix
+
+# Internal task list (purged from git history)
+Claude.md
+
+# Backup directory (created by build.sh --hard)
+.backup/
 
 # Large files and binaries
 *.zip
@@ -23,8 +32,6 @@ node_modules
 *.iso
 *.img
 *.pdf
-*.ai
-*.psd
 
 # Package lock files (large)
 package-lock.json
