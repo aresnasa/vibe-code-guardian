@@ -284,10 +284,19 @@ publish_vscode() {
         return 0
     fi
 
-    npx @vscode/vsce publish
-
-    log_success "Published v${version} to VS Code Marketplace"
-    log_info "URL: https://marketplace.visualstudio.com/items?itemName=${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}"
+    if npx @vscode/vsce publish; then
+        log_success "Published v${version} to VS Code Marketplace"
+        log_info "URL: https://marketplace.visualstudio.com/items?itemName=${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}"
+    else
+        local rc=$?
+        # "already exists" is not a real failure when re-publishing the same version
+        if npx @vscode/vsce show "${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}" --json 2>/dev/null | grep -q "\"version\":\"${version}\""; then
+            log_warning "v${version} already exists on Marketplace — skipping"
+        else
+            log_error "vsce publish exited with code ${rc}"
+            return 1
+        fi
+    fi
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -418,33 +427,25 @@ zed_create_pr() {
         # Use perl for reliable multi-line TOML section editing
         perl -i -0pe "s/(\[${ZED_EXTENSION_ID}\]\s*\n(?:(?!\[)[^\n]*\n)*?version\s*=\s*)\"[^\"]*\"/\1\"${version}\"/" extensions.toml
     else
-        # Insert new entry in alphabetical order (before [vibescript])
+        # Insert new entry in alphabetical order using perl (portable across macOS/Linux)
         log_info "Adding new entry to extensions.toml"
-        local entry
-        entry=$(printf '[%s]\nsubmodule = "extensions/%s"\nversion = "%s"\n' \
-            "$ZED_EXTENSION_ID" "$ZED_EXTENSION_ID" "$version")
-
-        # Find the right insertion point: the first [section] that sorts after our ID
-        local insert_before=""
-        while IFS= read -r section; do
-            if [[ "$section" > "[$ZED_EXTENSION_ID]" ]]; then
-                insert_before="$section"
-                break
-            fi
-        done < <(grep '^\[' extensions.toml | sort)
-
-        if [ -n "$insert_before" ]; then
-            # Escape brackets for sed
-            local escaped
-            escaped=$(echo "$insert_before" | sed 's/\[/\\[/g; s/\]/\\]/g')
-            sed -i '' "/${escaped}/i\\
-\\
-${entry//\\/\\\\}
-" extensions.toml
-        else
-            # Append at end
-            printf '\n%s\n' "$entry" >> extensions.toml
-        fi
+        perl -i -e '
+            use strict;
+            my $id = "'"${ZED_EXTENSION_ID}"'";
+            my $ver = "'"${version}"'";
+            my $entry = "\n[$id]\nsubmodule = \"extensions/$id\"\nversion = \"$ver\"\n";
+            my $inserted = 0;
+            while (<>) {
+                # Insert before the first [section] that sorts after our ID
+                if (!$inserted && /^\[([^\]]+)\]/ && $1 gt $id) {
+                    print $entry;
+                    $inserted = 1;
+                }
+                print;
+            }
+            # If nothing sorted after us, append at the end
+            print $entry unless $inserted;
+        ' extensions.toml
     fi
 
     git add extensions.toml
