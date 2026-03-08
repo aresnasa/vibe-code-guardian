@@ -416,7 +416,11 @@
         },
         "vibeCodeGuardian.notificationLevel": {
           "type": "string",
-          "enum": ["all", "milestone", "none"],
+          "enum": [
+            "all",
+            "milestone",
+            "none"
+          ],
           "default": "milestone",
           "enumDescriptions": [
             "All - Show notifications for all checkpoints",
@@ -441,7 +445,11 @@
         },
         "vibeCodeGuardian.commitLanguage": {
           "type": "string",
-          "enum": ["auto", "en", "zh"],
+          "enum": [
+            "auto",
+            "en",
+            "zh"
+          ],
           "default": "auto",
           "enumDescriptions": [
             "Auto-detect from VS Code language (如果是中文则使用中文)",
@@ -452,7 +460,11 @@
         },
         "vibeCodeGuardian.pushStrategy": {
           "type": "string",
-          "enum": ["none", "milestone", "all"],
+          "enum": [
+            "none",
+            "milestone",
+            "all"
+          ],
           "default": "milestone",
           "enumDescriptions": [
             "None - Never push to remote automatically",
@@ -489,13 +501,17 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.107.0",
-    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.27.1",
     "eslint": "^9.39.1",
     "npm-run-all": "^4.1.5",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.48.1"
+  },
+  "overrides": {
+    "serialize-javascript": "^7.0.3",
+    "diff": "^8.0.3"
   },
   "dependencies": {
     "simple-git": "^3.30.0"

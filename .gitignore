@@ -1,4 +1,5 @@
 # Build output
+.claude/
 out/
 dist/
 node_modules/
