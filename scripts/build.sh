@@ -316,9 +316,10 @@ zed_update_submodule() {
 
     pushd "$ZED_SUBMODULE_DIR" > /dev/null
 
-    # Update version in extension.toml & Cargo.toml
+    # Update version in extension.toml (all occurrences) & Cargo.toml (first occurrence only)
     sed -i '' "s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${version}\"/" extension.toml
-    sed -i '' "0,/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/{s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${version}\"/;}" Cargo.toml
+    # macOS sed doesn't support 0,/pattern/; use /^name/,/^version/ range to target [package] block
+    sed -i '' "/^name = /,/^version = /s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${version}\"/" Cargo.toml
 
     if ! git diff --quiet || ! git diff --cached --quiet; then
         git add extension.toml Cargo.toml
