@@ -207,6 +207,32 @@ let languageStatusBarItem: vscode.StatusBarItem;
 let notificationStatusBarItem: vscode.StatusBarItem;
 let pushStrategyStatusBarItem: vscode.StatusBarItem;
 
+/**
+ * Applies recommended VS Code settings for optimal Vibe Code Guardian experience
+ */
+async function applyRecommendedSettings() {
+    const config = vscode.workspace.getConfiguration();
+    const needsUpdate: string[] = [];
+
+    // Notification position
+    const notificationPosition = config.inspect('workbench.notifications.position')?.globalValue;
+    if (notificationPosition !== 'bottom-left') {
+        await config.update('workbench.notifications.position', 'bottom-left', vscode.ConfigurationTarget.Global);
+        needsUpdate.push('notification position → bottom-left');
+    }
+
+    // Notification timeout
+    const notificationTimeout = config.inspect('workbench.notifications.timeout')?.globalValue;
+    if (notificationTimeout !== 10000) {
+        await config.update('workbench.notifications.timeout', 10000, vscode.ConfigurationTarget.Global);
+        needsUpdate.push('notification timeout → 10s');
+    }
+
+    if (needsUpdate.length > 0) {
+        console.log(`⚙️ Vibe Code Guardian applied recommended settings: ${needsUpdate.join(', ')}`);
+    }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
     console.log('🎮 Vibe Code Guardian is activating...');
 
@@ -216,6 +242,8 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     try {
+        // Apply recommended VS Code settings
+        await applyRecommendedSettings();
         // Initialize all managers
         gitManager = new GitManager();
         checkpointManager = new CheckpointManager(context, gitManager);
