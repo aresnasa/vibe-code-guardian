@@ -76,10 +76,7 @@ suite('Extension Test Suite', () => {
 	});
 
 	test('local-only checkpoints keep snapshots and skip plugin git commits', async () => {
-		const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-		assert.ok(workspaceFolder, 'workspace folder should exist for extension tests');
-
-		const fixtureUri = vscode.Uri.joinPath(workspaceFolder!.uri, '.vibe-guardian-local-backup-test.txt');
+		const fixtureUri = vscode.Uri.file(path.join(os.tmpdir(), `.vibe-guardian-local-backup-test-${Date.now()}.txt`));
 		await vscode.workspace.fs.writeFile(fixtureUri, Buffer.from('current snapshot', 'utf8'));
 
 		let stageAndCommitAllCalls = 0;
