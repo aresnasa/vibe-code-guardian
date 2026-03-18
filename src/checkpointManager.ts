@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
+import * as path from 'path';
 import {
     Checkpoint,
     CheckpointType,
@@ -16,7 +17,8 @@ import {
     FileChangeType,
     DEFAULT_SETTINGS,
     CommitLanguage,
-    PushStrategy
+    PushStrategy,
+    TrackingMode
 } from './types';
 import { GitManager } from './gitManager';
 import { generateLocalizedCheckpointName } from './languageConfig';
@@ -146,16 +148,20 @@ export class CheckpointManager {
 
         // Sync with Git: Get actual changed files from Git status
         let gitCommitHash: string | undefined;
-        let actualChangedFiles = changedFiles;
+        let actualChangedFiles = await this.captureCheckpointSnapshots(changedFiles);
+        const shouldCreateGitCheckpoint =
+            this.storageData.settings.enableGit &&
+            this.storageData.settings.trackingMode === 'full' &&
+            await this.gitManager.isGitRepository();
         
-        if (this.storageData.settings.enableGit && await this.gitManager.isGitRepository()) {
+        if (shouldCreateGitCheckpoint) {
             try {
                 // Use Git's actual changed files list for accuracy
                 const gitChangedFiles = await this.gitManager.getDetailedChangedFiles();
                 
                 if (gitChangedFiles.length > 0) {
                     // Convert to ChangedFile format, filtering out files that don't exist
-                    actualChangedFiles = await this.syncChangedFilesWithGit(changedFiles, gitChangedFiles);
+                    actualChangedFiles = await this.syncChangedFilesWithGit(actualChangedFiles, gitChangedFiles);
                 }
 
                 // Stage and commit, filtering large files
@@ -172,7 +178,7 @@ export class CheckpointManager {
                     
                     // Update changedFiles with actual committed files
                     if (commitResult.changedFiles.length > 0) {
-                        actualChangedFiles = await this.convertToChangedFiles(commitResult.changedFiles);
+                        actualChangedFiles = await this.convertToChangedFiles(commitResult.changedFiles, actualChangedFiles);
                     }
                 }
             } catch (error) {
@@ -292,14 +298,14 @@ export class CheckpointManager {
         gitFiles: Array<{ path: string; changeType: 'added' | 'modified' | 'deleted' | 'renamed'; staged: boolean }>
     ): Promise<ChangedFile[]> {
         const result: ChangedFile[] = [];
-        const gitFilePaths = new Set(gitFiles.map(f => f.path));
 
         // Add Git files that match original files or are new
         for (const gitFile of gitFiles) {
             const originalFile = originalFiles.find(f => f.path.endsWith(gitFile.path) || gitFile.path.endsWith(f.path));
+            const resolvedPath = this.resolveWorkspacePath(gitFile.path);
             
             result.push({
-                path: gitFile.path,
+                path: resolvedPath,
                 changeType: this.mapChangeType(gitFile.changeType),
                 linesAdded: originalFile?.linesAdded ?? 0,
                 linesRemoved: originalFile?.linesRemoved ?? 0,
@@ -314,13 +320,74 @@ export class CheckpointManager {
     /**
      * Convert file paths to ChangedFile format
      */
-    private async convertToChangedFiles(filePaths: string[]): Promise<ChangedFile[]> {
+    private async convertToChangedFiles(filePaths: string[], originalFiles: ChangedFile[] = []): Promise<ChangedFile[]> {
         return filePaths.map(filePath => ({
-            path: filePath,
-            changeType: FileChangeType.Modified,
-            linesAdded: 0,
-            linesRemoved: 0
+            path: this.resolveWorkspacePath(filePath),
+            changeType: originalFiles.find(file => file.path.endsWith(filePath) || filePath.endsWith(file.path))?.changeType ?? FileChangeType.Modified,
+            linesAdded: originalFiles.find(file => file.path.endsWith(filePath) || filePath.endsWith(file.path))?.linesAdded ?? 0,
+            linesRemoved: originalFiles.find(file => file.path.endsWith(filePath) || filePath.endsWith(file.path))?.linesRemoved ?? 0,
+            previousContent: originalFiles.find(file => file.path.endsWith(filePath) || filePath.endsWith(file.path))?.previousContent,
+            currentContent: originalFiles.find(file => file.path.endsWith(filePath) || filePath.endsWith(file.path))?.currentContent
         }));
+    }
+
+    /**
+     * Capture checkpoint snapshots so local-only tracking can restore files without Git commits
+     */
+    private async captureCheckpointSnapshots(changedFiles: ChangedFile[]): Promise<ChangedFile[]> {
+        const isGitRepo = this.storageData.settings.enableGit && await this.gitManager.isGitRepository();
+
+        return Promise.all(changedFiles.map(async (file) => {
+            const resolvedPath = this.resolveWorkspacePath(file.path);
+            const previousContent = file.previousContent ?? await this.getPreviousFileContent(resolvedPath, file.changeType, isGitRepo);
+            const currentContent = file.currentContent ?? await this.getCurrentFileContent(resolvedPath, file.changeType);
+
+            return {
+                ...file,
+                path: resolvedPath,
+                previousContent,
+                currentContent
+            };
+        }));
+    }
+
+    private async getCurrentFileContent(filePath: string, changeType: FileChangeType): Promise<string | undefined> {
+        if (changeType === FileChangeType.Deleted) {
+            return undefined;
+        }
+
+        const openDocument = vscode.workspace.textDocuments.find(doc => doc.uri.fsPath === filePath);
+        if (openDocument) {
+            return openDocument.getText();
+        }
+
+        try {
+            const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
+            return Buffer.from(bytes).toString('utf8');
+        } catch {
+            return undefined;
+        }
+    }
+
+    private async getPreviousFileContent(
+        filePath: string,
+        changeType: FileChangeType,
+        isGitRepo: boolean
+    ): Promise<string | undefined> {
+        if (!isGitRepo || changeType === FileChangeType.Added) {
+            return undefined;
+        }
+
+        return this.gitManager.getFileAtCommit(filePath, 'HEAD');
+    }
+
+    private resolveWorkspacePath(filePath: string): string {
+        if (path.isAbsolute(filePath)) {
+            return filePath;
+        }
+
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        return workspaceFolder ? path.join(workspaceFolder, filePath) : filePath;
     }
 
     /**

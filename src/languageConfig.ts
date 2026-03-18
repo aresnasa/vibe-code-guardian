@@ -4,7 +4,7 @@
  */
 
 import * as vscode from 'vscode';
-import { CheckpointType, CheckpointSource, CommitLanguage, NotificationLevel, PushStrategy } from './types';
+import { CheckpointType, CheckpointSource, CommitLanguage, NotificationLevel, PushStrategy, TrackingMode } from './types';
 
 /** Language strings for checkpoint names and commit messages */
 export interface LanguageStrings {
@@ -249,5 +249,33 @@ export function getNextPushStrategy(current: PushStrategy): PushStrategy {
             return 'none';
         case 'none':
             return 'milestone';
+    }
+}
+
+/**
+ * Gets the display name for tracking mode
+ * @param mode Tracking mode
+ * @returns Display name with icon
+ */
+export function getTrackingModeDisplayName(mode: TrackingMode): string {
+    switch (mode) {
+        case 'full':
+            return '$(git-commit) Full Tracking';
+        case 'local-only':
+            return '$(archive) Local Backup';
+    }
+}
+
+/**
+ * Gets the next tracking mode in the cycle: full -> local-only -> full
+ * @param current Current tracking mode
+ * @returns Next tracking mode
+ */
+export function getNextTrackingMode(current: TrackingMode): TrackingMode {
+    switch (current) {
+        case 'full':
+            return 'local-only';
+        case 'local-only':
+            return 'full';
     }
 }

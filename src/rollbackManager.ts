@@ -296,7 +296,7 @@ export class RollbackManager {
 
         // Check if we can rollback - need either gitCommitHash or stored content
         const hasGitCommit = !!checkpoint.gitCommitHash;
-        const hasStoredContent = checkpoint.changedFiles.some(f => f.previousContent !== undefined);
+        const hasStoredContent = checkpoint.changedFiles.some(f => f.previousContent !== undefined || f.currentContent !== undefined);
         
         if (!hasGitCommit && !hasStoredContent) {
             return {
@@ -392,15 +392,17 @@ export class RollbackManager {
                 
                 // If there are uncommitted changes, auto-save first
                 if (await this.gitManager.hasUncommittedChanges()) {
-                    try {
+                    if (this.checkpointManager.getSettings().trackingMode === 'full') {
+                        try {
                         // Create a backup commit
-                        await this.gitManager.createCommit(
-                            ['.'],
-                            '[Vibe Guardian] 🔄 Auto-save before time travel'
-                        );
-                    } catch {
-                        // If commit fails, stash instead
-                        await this.gitManager.stash('Vibe Guardian: auto-stash before time travel');
+                            await this.gitManager.createCommit(
+                                ['.'],
+                                '[Vibe Guardian] 🔄 Auto-save before time travel'
+                            );
+                        } catch {
+                            // If commit fails, stash instead
+                            await this.gitManager.stash('Vibe Guardian: auto-stash before time travel');
+                        }
                     }
                 }
 
@@ -434,14 +436,16 @@ export class RollbackManager {
             console.log('Attempting fallback file content restoration...');
             for (const file of checkpoint.changedFiles) {
                 try {
-                    if (file.previousContent !== undefined) {
-                        await this.restoreFileContent(file.path, file.previousContent);
+                    const targetContent = this.getCheckpointTargetContent(file);
+
+                    if (file.changeType === 'deleted' && targetContent === undefined) {
+                        await this.deleteFileIfExists(file.path);
+                        filesRestored.push(file.path);
+                    } else if (targetContent !== undefined) {
+                        await this.restoreFileContent(file.path, targetContent);
                         filesRestored.push(file.path);
                     } else if (checkpoint.gitCommitHash) {
-                        const content = await this.gitManager.getFileAtCommit(
-                            file.path,
-                            `${checkpoint.gitCommitHash}^`
-                        );
+                        const content = await this.gitManager.getFileAtCommit(file.path, checkpoint.gitCommitHash);
                         if (content !== undefined) {
                             await this.restoreFileContent(file.path, content);
                             filesRestored.push(file.path);
@@ -497,14 +501,22 @@ export class RollbackManager {
         }
 
         try {
-            if (file.previousContent !== undefined) {
-                await this.restoreFileContent(filePath, file.previousContent);
+            const targetContent = this.getCheckpointTargetContent(file);
+
+            if (file.changeType === 'deleted' && targetContent === undefined) {
+                await this.deleteFileIfExists(filePath);
+                vscode.window.showInformationMessage(`Restored: ${path.basename(filePath)}`);
+                return true;
+            }
+
+            if (targetContent !== undefined) {
+                await this.restoreFileContent(filePath, targetContent);
                 vscode.window.showInformationMessage(`Restored: ${path.basename(filePath)}`);
                 return true;
             } else if (checkpoint.gitCommitHash) {
                 const success = await this.gitManager.restoreFile(
                     filePath,
-                    `${checkpoint.gitCommitHash}^`
+                    checkpoint.gitCommitHash
                 );
                 if (success) {
                     vscode.window.showInformationMessage(`Restored: ${path.basename(filePath)}`);
@@ -541,6 +553,21 @@ export class RollbackManager {
         } else {
             // Write directly to file
             fs.writeFileSync(filePath, content, 'utf8');
+        }
+    }
+
+    private getCheckpointTargetContent(file: ChangedFile): string | undefined {
+        return file.currentContent ?? file.previousContent;
+    }
+
+    private async deleteFileIfExists(filePath: string): Promise<void> {
+        const uri = vscode.Uri.file(filePath);
+        try {
+            await vscode.workspace.fs.delete(uri, { useTrash: false });
+        } catch {
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
         }
     }
 

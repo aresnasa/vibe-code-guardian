@@ -10,8 +10,8 @@ import { AIDetector } from './aiDetector';
 import { RollbackManager, DiffContentProvider } from './rollbackManager';
 import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
 import { StateMonitor } from './stateMonitor';
-import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage, NotificationLevel, PushStrategy } from './types';
-import { getLanguageDisplayName, getNextLanguage, getNotificationLevelDisplayName, getNextNotificationLevel, getPushStrategyDisplayName, getNextPushStrategy } from './languageConfig';
+import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage, NotificationLevel, PushStrategy, TrackingMode } from './types';
+import { getLanguageDisplayName, getNextLanguage, getNotificationLevelDisplayName, getNextNotificationLevel, getPushStrategyDisplayName, getNextPushStrategy, getTrackingModeDisplayName, getNextTrackingMode } from './languageConfig';
 import { GitGraphTreeProvider, GitGraphTreeItem } from './gitGraphTreeProvider';
 import { GitGraphWebviewManager } from './gitGraphWebview';
 
@@ -206,6 +206,39 @@ let gitGraphWebview: GitGraphWebviewManager;
 let languageStatusBarItem: vscode.StatusBarItem;
 let notificationStatusBarItem: vscode.StatusBarItem;
 let pushStrategyStatusBarItem: vscode.StatusBarItem;
+let trackingModeStatusBarItem: vscode.StatusBarItem;
+
+async function syncSettingsFromConfiguration(): Promise<void> {
+    const config = vscode.workspace.getConfiguration('vibeCodeGuardian');
+    const autoSaveEnabled = config.get<boolean>('autoSaveEnabled', true);
+    const autoSaveIntervalMinutes = config.get<number>('autoSaveIntervalMinutes', 5);
+
+    await checkpointManager.updateSettings({
+        autoCheckpointOnAI: config.get<boolean>('autoCheckpointOnAIChanges', true),
+        autoCheckpointOnUserSave: config.get<boolean>('autoCheckpointOnUserSave', true),
+        minLinesForUserCheckpoint: config.get<number>('minLinesForUserCheckpoint', 5),
+        autoSaveInterval: autoSaveEnabled ? autoSaveIntervalMinutes * 60 : 0,
+        maxCheckpoints: config.get<number>('maxCheckpointsPerSession', 50),
+        showNotifications: config.get<boolean>('showNotifications', true),
+        notificationLevel: config.get<NotificationLevel>('notificationLevel', 'milestone'),
+        notificationThrottle: config.get<number>('notificationThrottle', 5000),
+        maxNotificationWindows: config.get<number>('maxNotificationWindows', 3),
+        commitLanguage: config.get<CommitLanguage>('commitLanguage', 'auto'),
+        pushStrategy: config.get<PushStrategy>('pushStrategy', 'milestone'),
+        maxFileSize: config.get<number>('maxFileSizeKB', 512) * 1024,
+        trackingMode: config.get<TrackingMode>('trackingMode', 'full')
+    });
+}
+
+function applyRuntimeSettings(context: vscode.ExtensionContext): void {
+    const settings = checkpointManager.getSettings();
+    stateMonitor.setAutoCommit(settings.trackingMode === 'full');
+    updateLanguageStatusBar(settings.commitLanguage);
+    updateNotificationStatusBar(settings.notificationLevel);
+    updatePushStrategyStatusBar(settings.pushStrategy);
+    updateTrackingModeStatusBar(settings.trackingMode);
+    startAutoSaveTimer(context);
+}
 
 /**
  * Applies recommended VS Code settings for optimal Vibe Code Guardian experience
@@ -247,6 +280,7 @@ export async function activate(context: vscode.ExtensionContext) {
         // Initialize all managers
         gitManager = new GitManager();
         checkpointManager = new CheckpointManager(context, gitManager);
+        await syncSettingsFromConfiguration();
         aiDetector = new AIDetector();
         rollbackManager = new RollbackManager(gitManager, checkpointManager);
         treeProvider = new TimelineTreeProvider(checkpointManager);
@@ -310,6 +344,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // Initialize and start State Monitor
         stateMonitor = new StateMonitor(gitManager);
+        applyRuntimeSettings(context);
         stateMonitor.start();
         context.subscriptions.push({ dispose: () => stateMonitor.dispose() });
 
@@ -326,6 +361,7 @@ export async function activate(context: vscode.ExtensionContext) {
         createLanguageStatusBar(context);
         createNotificationStatusBar(context);
         createPushStrategyStatusBar(context);
+        createTrackingModeStatusBar(context);
 
         // Show welcome and auto-start session
         vscode.window.showInformationMessage('🎮 Vibe Code Guardian activated!');
@@ -341,11 +377,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
 async function getChangedFilesForCheckpoint(): Promise<ChangedFile[]> {
     const changedFiles: ChangedFile[] = [];
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     try {
         const gitFiles = await gitManager.getChangedFiles();
         for (const filePath of gitFiles) {
             changedFiles.push({
-                path: filePath,
+                path: workspaceRoot && !filePath.startsWith('/')
+                    ? vscode.Uri.joinPath(vscode.Uri.file(workspaceRoot), filePath).fsPath
+                    : filePath,
                 changeType: FileChangeType.Modified,
                 linesAdded: 0,
                 linesRemoved: 0
@@ -974,6 +1013,20 @@ function registerCommands(context: vscode.ExtensionContext) {
             if (snapshot) {
                 vscode.window.showInformationMessage(`📌 State captured: ${snapshot.commitHash.substring(0, 7)}`);
                 treeProvider.refresh();
+            } else if (checkpointManager.getSettings().trackingMode === 'local-only') {
+                const changedFiles = await getChangedFilesForCheckpoint();
+                const checkpoint = await checkpointManager.createCheckpoint(
+                    CheckpointType.Manual,
+                    CheckpointSource.User,
+                    changedFiles,
+                    { description: description || 'Local state snapshot' }
+                );
+                if (checkpoint) {
+                    vscode.window.showInformationMessage(`📦 Local state captured: ${checkpoint.name}`);
+                    treeProvider.refresh();
+                } else {
+                    vscode.window.showWarningMessage('No changes to capture.');
+                }
             } else {
                 vscode.window.showWarningMessage('No changes to capture.');
             }
@@ -1266,6 +1319,22 @@ function registerCommands(context: vscode.ExtensionContext) {
         })
     );
 
+    // Toggle Tracking Mode
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.toggleTrackingMode', async () => {
+            const settings = checkpointManager.getSettings();
+            const nextMode = getNextTrackingMode(settings.trackingMode);
+            await checkpointManager.updateSettings({ trackingMode: nextMode });
+            applyRuntimeSettings(context);
+
+            const displayName = getTrackingModeDisplayName(nextMode);
+            const detail = nextMode === 'local-only'
+                ? 'Plugin Git commits are disabled. Checkpoints stay local and rollback uses file snapshots.'
+                : 'Plugin Git commits are enabled again. Automatic checkpoints can create local Git history.';
+            vscode.window.showInformationMessage(`${displayName}: ${detail}`);
+        })
+    );
+
     // ============================================
     // Git Graph Commands
     // ============================================
@@ -1351,6 +1420,17 @@ function setupEventListeners(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(() => {
             gitManager.reinitializeForActiveEditor();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(async (event) => {
+            if (!event.affectsConfiguration('vibeCodeGuardian')) {
+                return;
+            }
+
+            await syncSettingsFromConfiguration();
+            applyRuntimeSettings(context);
         })
     );
 
@@ -1548,6 +1628,24 @@ function createPushStrategyStatusBar(context: vscode.ExtensionContext) {
 function updatePushStrategyStatusBar(strategy: PushStrategy) {
     if (pushStrategyStatusBarItem) {
         pushStrategyStatusBarItem.text = getPushStrategyDisplayName(strategy);
+    }
+}
+
+function createTrackingModeStatusBar(context: vscode.ExtensionContext) {
+    trackingModeStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 97);
+    trackingModeStatusBarItem.command = 'vibeCodeGuardian.toggleTrackingMode';
+    trackingModeStatusBarItem.tooltip = 'Click to toggle tracking mode (Full Tracking/Local Backup)';
+
+    const settings = checkpointManager.getSettings();
+    updateTrackingModeStatusBar(settings.trackingMode);
+
+    trackingModeStatusBarItem.show();
+    context.subscriptions.push(trackingModeStatusBarItem);
+}
+
+function updateTrackingModeStatusBar(mode: TrackingMode) {
+    if (trackingModeStatusBarItem) {
+        trackingModeStatusBarItem.text = getTrackingModeDisplayName(mode);
     }
 }
 

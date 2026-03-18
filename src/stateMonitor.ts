@@ -50,7 +50,9 @@ export class StateMonitor {
         this.startFileWatcher();
 
         // Do initial state capture
-        this.captureState('State Monitor initialized');
+        if (this.autoCommitEnabled) {
+            this.captureState('State Monitor initialized');
+        }
     }
 
     /**
@@ -367,7 +369,9 @@ export class StateMonitor {
             
             if (hasChanges) {
                 // Auto-save current state before switching
-                const saved = await this.captureState('Auto-save before time travel');
+                const saved = this.autoCommitEnabled
+                    ? await this.captureState('Auto-save before time travel')
+                    : undefined;
                 if (!saved) {
                     // If can't save, stash changes
                     await this.gitManager.stash('Vibe Guardian: stash before time travel');
