@@ -28,6 +28,10 @@ class MockWorkspaceState implements vscode.Memento {
 		}
 		this.store.set(key, value);
 	}
+
+	setKeysForSync(_keys: readonly string[]): void {
+		// Test double: no-op
+	}
 }
 
 function createMockContext(): vscode.ExtensionContext {
@@ -60,7 +64,7 @@ function createMockContext(): vscode.ExtensionContext {
 		logPath7: undefined as never,
 		languageModelAccessInformation: {} as vscode.LanguageModelAccessInformation,
 		extension: {} as vscode.Extension<unknown>
-	} as vscode.ExtensionContext;
+	} as unknown as vscode.ExtensionContext;
 }
 
 suite('Extension Test Suite', () => {
