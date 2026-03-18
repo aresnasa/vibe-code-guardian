@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Checkpoint, RollbackResult, DiffInfo, ChangedFile } from './types';
+import { Checkpoint, RollbackResult, DiffInfo, ChangedFile, Milestone, MilestoneStatus } from './types';
 import { GitManager } from './gitManager';
 import { CheckpointManager } from './checkpointManager';
 
@@ -667,6 +667,72 @@ export class RollbackManager {
 
     public dispose(): void {
         // Cleanup if needed
+    }
+
+    /**
+     * Rollback all files to their state before a milestone started.
+     * Uses the `previousContent` stored in the earliest checkpoint of the milestone.
+     */
+    public async rollbackToMilestone(milestoneId: string, options?: { skipConfirmation?: boolean }): Promise<RollbackResult> {
+        const milestone = this.checkpointManager.getMilestone(milestoneId);
+        if (!milestone) {
+            return { success: false, message: 'Milestone not found', filesRestored: [], filesNotRestored: [], errors: ['Milestone not found'] };
+        }
+
+        const preState = this.checkpointManager.getMilestonePreState(milestoneId);
+        if (preState.length === 0) {
+            return { success: false, message: 'No pre-milestone snapshot available for this milestone.', filesRestored: [], filesNotRestored: [], errors: ['No snapshot data'] };
+        }
+
+        if (!options?.skipConfirmation) {
+            const fileList = preState.map(f => `  • ${path.basename(f.path)}`).join('\n');
+            const confirm = await vscode.window.showWarningMessage(
+                `⚠️ Rollback to before milestone "${milestone.name}"?\n\nIntent was: ${milestone.intent}`,
+                { modal: true, detail: `The following files will be reverted:\n${fileList}` },
+                'Rollback',
+                'Cancel'
+            );
+            if (confirm !== 'Rollback') {
+                return { success: false, message: 'Cancelled', filesRestored: [], filesNotRestored: [], errors: [] };
+            }
+        }
+
+        const filesRestored: string[] = [];
+        const filesNotRestored: string[] = [];
+        const errors: string[] = [];
+
+        for (const fileState of preState) {
+            try {
+                if (fileState.previousContent !== undefined) {
+                    await this.restoreFileContent(fileState.path, fileState.previousContent);
+                    filesRestored.push(fileState.path);
+                } else if (fileState.changeType === 'added' as any) {
+                    // File was added during this milestone — delete it
+                    await this.deleteFileIfExists(fileState.path);
+                    filesRestored.push(fileState.path);
+                } else {
+                    filesNotRestored.push(fileState.path);
+                }
+            } catch (error) {
+                errors.push(`${fileState.path}: ${error}`);
+                filesNotRestored.push(fileState.path);
+            }
+        }
+
+        if (filesRestored.length > 0) {
+            await this.refreshAllOpenFiles();
+        }
+
+        const success = filesRestored.length > 0 && errors.length === 0;
+        return {
+            success,
+            message: success
+                ? `✅ Rolled back to before milestone: "${milestone.name}". ${filesRestored.length} files restored.`
+                : `Partial rollback: ${filesRestored.length} restored, ${errors.length} errors.`,
+            filesRestored,
+            filesNotRestored,
+            errors
+        };
     }
 }
 

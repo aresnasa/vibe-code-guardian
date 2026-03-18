@@ -1,10 +1,10 @@
 /**
  * Vibe Code Guardian - Timeline Tree View
- * Game-like save slot view for checkpoints
+ * Game-like save slot view for checkpoints, grouped by intent-driven milestones
  */
 
 import * as vscode from 'vscode';
-import { Checkpoint, CheckpointType, CheckpointSource, CodingSession } from './types';
+import { Checkpoint, CheckpointType, CheckpointSource, CodingSession, Milestone, MilestoneStatus } from './types';
 import { CheckpointManager } from './checkpointManager';
 
 export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineItem> {
@@ -14,7 +14,7 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         this._onDidChangeTreeData.event;
 
     private checkpointManager: CheckpointManager;
-    private viewMode: 'all' | 'session' | 'starred' = 'session';
+    private viewMode: 'all' | 'session' | 'starred' | 'milestone' = 'milestone';
 
     constructor(checkpointManager: CheckpointManager) {
         this.checkpointManager = checkpointManager;
@@ -23,13 +23,14 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         this.checkpointManager.onCheckpointCreated(() => this.refresh());
         this.checkpointManager.onCheckpointDeleted(() => this.refresh());
         this.checkpointManager.onSessionChanged(() => this.refresh());
+        this.checkpointManager.onMilestoneChanged(() => this.refresh());
     }
 
     refresh(): void {
         this._onDidChangeTreeData.fire();
     }
 
-    setViewMode(mode: 'all' | 'session' | 'starred'): void {
+    setViewMode(mode: 'all' | 'session' | 'starred' | 'milestone'): void {
         this.viewMode = mode;
         this.refresh();
     }
@@ -42,6 +43,13 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         if (!element) {
             // Root level - show sessions or checkpoints based on view mode
             return Promise.resolve(this.getRootItems());
+        }
+
+        if (element.contextValue === 'milestone' || element.contextValue === 'milestone-active') {
+            // Show checkpoints under this milestone
+            const milestoneId = element.milestoneId!;
+            const checkpoints = this.checkpointManager.getMilestoneCheckpoints(milestoneId);
+            return Promise.resolve(checkpoints.map(cp => this.createCheckpointItem(cp)));
         }
 
         if (element.contextValue === 'session') {
@@ -68,6 +76,28 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         const items: TimelineItem[] = [];
 
         switch (this.viewMode) {
+            case 'milestone': {
+                // Show active milestone first, then completed/abandoned
+                const activeMilestone = this.checkpointManager.getActiveMilestone();
+                if (activeMilestone) {
+                    items.push(this.createMilestoneItem(activeMilestone, true));
+                }
+
+                const otherMilestones = this.checkpointManager.getMilestones()
+                    .filter(m => m.id !== activeMilestone?.id)
+                    .slice(0, 10);
+                otherMilestones.forEach(m => items.push(this.createMilestoneItem(m, false)));
+
+                // Orphan checkpoints (not in any milestone)
+                const orphaned = this.checkpointManager.getCheckpoints()
+                    .filter(cp => !cp.milestoneId);
+                if (orphaned.length > 0) {
+                    const group = this.createOrphanGroup(orphaned.length);
+                    items.push(group);
+                }
+                break;
+            }
+
             case 'session': {
                 // Show current session checkpoints at root
                 const session = this.checkpointManager.getActiveSession();
@@ -107,13 +137,87 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         // Add "No checkpoints" message if empty
         if (items.length === 0) {
             items.push(new TimelineItem(
-                '📭 No checkpoints yet',
-                'Press Ctrl+Shift+S to save your first checkpoint',
+                '📭 No milestones yet',
+                'Use "Start Milestone" to describe your intent',
                 vscode.TreeItemCollapsibleState.None
             ));
         }
 
         return items;
+    }
+
+    private createMilestoneItem(milestone: Milestone, expanded: boolean): TimelineItem {
+        const statusIcon =
+            milestone.status === MilestoneStatus.Active ? '🟢' :
+            milestone.status === MilestoneStatus.Completed ? '✅' : '🚫';
+
+        const label = `${statusIcon} ${milestone.name}`;
+        const cpCount = milestone.checkpointIds.length;
+        const fileCount = milestone.changedFiles.length;
+        const description = `${cpCount} saves · ${fileCount} files`;
+
+        const hasCheckpoints = cpCount > 0;
+        const item = new TimelineItem(
+            label,
+            description,
+            hasCheckpoints ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None
+        );
+
+        item.contextValue = milestone.status === MilestoneStatus.Active ? 'milestone-active' : 'milestone';
+        item.milestoneId = milestone.id;
+        item.iconPath = new vscode.ThemeIcon(
+            milestone.status === MilestoneStatus.Active ? 'target' :
+            milestone.status === MilestoneStatus.Completed ? 'pass-filled' : 'circle-slash',
+            milestone.status === MilestoneStatus.Active ? new vscode.ThemeColor('charts.green') : undefined
+        );
+        item.tooltip = this.createMilestoneTooltip(milestone);
+        item.command = {
+            command: 'vibeCodeGuardian.showMilestoneDetails',
+            title: 'Show Milestone Details',
+            arguments: [milestone.id]
+        };
+
+        return item;
+    }
+
+    private createOrphanGroup(count: number): TimelineItem {
+        const item = new TimelineItem(
+            '📋 Untracked checkpoints',
+            `${count} checkpoints without a milestone`,
+            vscode.TreeItemCollapsibleState.Collapsed
+        );
+        item.contextValue = 'orphan-group';
+        item.iconPath = new vscode.ThemeIcon('history');
+        return item;
+    }
+
+    private createMilestoneTooltip(milestone: Milestone): vscode.MarkdownString {
+        const md = new vscode.MarkdownString();
+        md.appendMarkdown(`### 🎯 ${milestone.name}\n\n`);
+        md.appendMarkdown(`**Intent (WHY):** ${milestone.intent}\n\n`);
+        if (milestone.description) {
+            md.appendMarkdown(`**Context:** ${milestone.description}\n\n`);
+        }
+        md.appendMarkdown(`**Status:** ${milestone.status}\n\n`);
+        md.appendMarkdown(`**Created:** ${new Date(milestone.createdAt).toLocaleString()}\n\n`);
+        if (milestone.closedAt) {
+            md.appendMarkdown(`**Closed:** ${new Date(milestone.closedAt).toLocaleString()}\n\n`);
+        }
+        if (milestone.changedFiles.length > 0) {
+            md.appendMarkdown(`**Changed Files:**\n`);
+            for (const file of milestone.changedFiles.slice(0, 8)) {
+                const fileName = file.path.split('/').pop();
+                md.appendMarkdown(`- ${fileName}\n`);
+            }
+            if (milestone.changedFiles.length > 8) {
+                md.appendMarkdown(`- … and ${milestone.changedFiles.length - 8} more\n`);
+            }
+        }
+        if (milestone.gitCommitHash) {
+            md.appendMarkdown(`\n**Git Commit:** \`${milestone.gitCommitHash.substring(0, 8)}\`\n`);
+        }
+        md.appendMarkdown(`\n---\n*Right-click to rollback, complete, or abandon*`);
+        return md;
     }
 
     private createSessionItem(session: CodingSession, expanded: boolean): TimelineItem {
@@ -298,6 +402,7 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
 export class TimelineItem extends vscode.TreeItem {
     public sessionId?: string;
     public checkpointId?: string;
+    public milestoneId?: string;
     
     constructor(
         public readonly label: string,

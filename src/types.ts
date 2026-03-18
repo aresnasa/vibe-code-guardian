@@ -30,6 +30,8 @@ export interface Checkpoint {
     starred: boolean;
     /** Branch name if session-based branching is enabled */
     branchName?: string;
+    /** Milestone ID this checkpoint belongs to (intent grouping) */
+    milestoneId?: string;
 }
 
 export enum CheckpointType {
@@ -98,6 +100,52 @@ export type PushStrategy = 'none' | 'milestone' | 'all';
 /** Tracking mode: 'full' creates git commits for every checkpoint, 'local-only' stores snapshots without git commits */
 export type TrackingMode = 'full' | 'local-only';
 
+// ============================================
+// Milestone Types - Intent-driven code grouping
+// ============================================
+
+/** Milestone status lifecycle */
+export enum MilestoneStatus {
+    /** Currently working on this intent */
+    Active = 'active',
+    /** Intent fulfilled, changes committed */
+    Completed = 'completed',
+    /** Decided not to proceed, changes may be discarded */
+    Abandoned = 'abandoned'
+}
+
+/** A milestone groups related code changes under a single intent */
+export interface Milestone {
+    /** Unique identifier */
+    id: string;
+    /** Short name, e.g. "Add user authentication" */
+    name: string;
+    /** WHY this change is being made — visible to developers and AI agents */
+    intent: string;
+    /** Optional longer description with additional context */
+    description?: string;
+    /** When the milestone was created */
+    createdAt: number;
+    /** When the milestone was completed or abandoned */
+    closedAt?: number;
+    /** Git commit hash created when milestone is completed */
+    gitCommitHash?: string;
+    /** Current status */
+    status: MilestoneStatus;
+    /** Local checkpoint IDs that belong to this milestone (fine-grained snapshots) */
+    checkpointIds: string[];
+    /** Aggregated changed files across all checkpoints in this milestone */
+    changedFiles: ChangedFile[];
+    /** Who initiated the milestone */
+    source: CheckpointSource;
+    /** Session this milestone belongs to */
+    sessionId: string;
+    /** Tags for organization */
+    tags: string[];
+    /** Parent milestone ID (for sub-tasks) */
+    parentMilestoneId?: string;
+}
+
 export interface CodingSession {
     /** Unique session identifier */
     id: string;
@@ -128,6 +176,10 @@ export interface CheckpointStorageData {
     sessions: CodingSession[];
     /** Current active session ID */
     activeSessionId?: string;
+    /** All milestones */
+    milestones: Milestone[];
+    /** Currently active milestone ID */
+    activeMilestoneId?: string;
     /** Settings */
     settings: GuardianSettings;
 }

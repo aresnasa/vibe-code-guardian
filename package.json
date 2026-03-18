@@ -2,7 +2,7 @@
   "name": "vibe-code-guardian",
   "displayName": "Vibe Code Guardian",
   "description": "Game-like checkpoint system for AI-assisted coding - save, load, and rollback your vibe coding sessions",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "publisher": "vibe-coder",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -274,24 +274,71 @@
         "title": "Show File Diff in Graph",
         "icon": "$(diff)",
         "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.rollbackToMilestone",
+        "title": "Rollback to Before Milestone",
+        "icon": "$(discard)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showMilestoneDetails",
+        "title": "Show Milestone Details",
+        "icon": "$(target)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.toggleTimelineView",
+        "title": "Toggle Timeline View (Milestone/Session/All)",
+        "icon": "$(list-filter)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.startMilestone",
+        "title": "Start Milestone",
+        "icon": "$(target)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.completeMilestone",
+        "title": "Complete Milestone",
+        "icon": "$(pass-filled)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.abandonMilestone",
+        "title": "Abandon Milestone",
+        "icon": "$(circle-slash)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showMilestones",
+        "title": "Show All Milestones",
+        "icon": "$(list-ordered)",
+        "category": "Vibe Guardian"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "vibeCodeGuardian.createCheckpoint",
+          "command": "vibeCodeGuardian.startMilestone",
           "when": "view == vibeCodeGuardian.checkpointExplorer",
           "group": "navigation@1"
         },
         {
-          "command": "vibeCodeGuardian.quickSave",
+          "command": "vibeCodeGuardian.createCheckpoint",
           "when": "view == vibeCodeGuardian.checkpointExplorer",
           "group": "navigation@2"
         },
         {
-          "command": "vibeCodeGuardian.refresh",
+          "command": "vibeCodeGuardian.toggleTimelineView",
           "when": "view == vibeCodeGuardian.checkpointExplorer",
           "group": "navigation@3"
+        },
+        {
+          "command": "vibeCodeGuardian.refresh",
+          "when": "view == vibeCodeGuardian.checkpointExplorer",
+          "group": "navigation@4"
         },
         {
           "command": "vibeCodeGuardian.showGitGraph",
@@ -310,6 +357,21 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "vibeCodeGuardian.completeMilestone",
+          "when": "view == vibeCodeGuardian.checkpointExplorer && viewItem == milestone-active",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "vibeCodeGuardian.rollbackToMilestone",
+          "when": "view == vibeCodeGuardian.checkpointExplorer && (viewItem == milestone-active || viewItem == milestone)",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "vibeCodeGuardian.abandonMilestone",
+          "when": "view == vibeCodeGuardian.checkpointExplorer && viewItem == milestone-active",
+          "group": "2_modify@1"
+        },
         {
           "command": "vibeCodeGuardian.rollback",
           "when": "view == vibeCodeGuardian.checkpointExplorer && viewItem == checkpoint",
@@ -369,6 +431,11 @@
         "key": "ctrl+alt+s",
         "mac": "cmd+alt+s",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "vibeCodeGuardian.startMilestone",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m"
       },
       {
         "command": "vibeCodeGuardian.rollback",

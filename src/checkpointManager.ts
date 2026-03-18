@@ -18,26 +18,33 @@ import {
     DEFAULT_SETTINGS,
     CommitLanguage,
     PushStrategy,
-    TrackingMode
+    TrackingMode,
+    Milestone,
+    MilestoneStatus
 } from './types';
 import { GitManager } from './gitManager';
 import { generateLocalizedCheckpointName } from './languageConfig';
+import { MilestoneManager } from './milestoneManager';
 
 export class CheckpointManager {
     private context: vscode.ExtensionContext;
     private gitManager: GitManager;
+    private milestoneManager: MilestoneManager;
     private storageData: CheckpointStorageData;
     private _onCheckpointCreated: vscode.EventEmitter<Checkpoint> = new vscode.EventEmitter<Checkpoint>();
     private _onCheckpointDeleted: vscode.EventEmitter<string> = new vscode.EventEmitter<string>();
     private _onSessionChanged: vscode.EventEmitter<CodingSession | undefined> = new vscode.EventEmitter<CodingSession | undefined>();
+    private _onMilestoneChanged: vscode.EventEmitter<Milestone | undefined> = new vscode.EventEmitter<Milestone | undefined>();
 
     public readonly onCheckpointCreated: vscode.Event<Checkpoint> = this._onCheckpointCreated.event;
     public readonly onCheckpointDeleted: vscode.Event<string> = this._onCheckpointDeleted.event;
     public readonly onSessionChanged: vscode.Event<CodingSession | undefined> = this._onSessionChanged.event;
+    public readonly onMilestoneChanged: vscode.Event<Milestone | undefined> = this._onMilestoneChanged.event;
 
     constructor(context: vscode.ExtensionContext, gitManager: GitManager) {
         this.context = context;
         this.gitManager = gitManager;
+        this.milestoneManager = new MilestoneManager(gitManager);
         this.storageData = this.loadStorageData();
     }
 
@@ -50,6 +57,8 @@ export class CheckpointManager {
             // Merge with DEFAULT_SETTINGS to ensure new settings fields have default values
             return {
                 ...data,
+                milestones: data.milestones ?? [],
+                activeMilestoneId: data.activeMilestoneId,
                 settings: { ...DEFAULT_SETTINGS, ...data.settings }
             };
         }
@@ -58,6 +67,8 @@ export class CheckpointManager {
             checkpoints: [],
             sessions: [],
             activeSessionId: undefined,
+            milestones: [],
+            activeMilestoneId: undefined,
             settings: DEFAULT_SETTINGS
         };
     }
@@ -203,10 +214,19 @@ export class CheckpointManager {
             parentId,
             tags: options?.tags || [],
             starred: false,
-            branchName: this.getActiveSession()?.branchName
+            branchName: this.getActiveSession()?.branchName,
+            milestoneId: this.storageData.activeMilestoneId
         };
 
         this.storageData.checkpoints.push(checkpoint);
+
+        // Link to active milestone if one exists
+        if (this.storageData.activeMilestoneId) {
+            const milestone = this.getActiveMilestone();
+            if (milestone) {
+                this.milestoneManager.linkCheckpoint(milestone, checkpoint);
+            }
+        }
 
         // Update session
         const session = this.getActiveSession();
@@ -804,6 +824,288 @@ export class CheckpointManager {
         };
     }
 
+    // ============================================
+    // Milestone Operations
+    // ============================================
+
+    /**
+     * Start a new milestone — all subsequent checkpoints will be linked to it
+     */
+    public async startMilestone(
+        name: string,
+        intent: string,
+        options?: {
+            description?: string;
+            source?: CheckpointSource;
+            tags?: string[];
+            parentMilestoneId?: string;
+        }
+    ): Promise<Milestone> {
+        const sessionId = this.storageData.activeSessionId;
+        if (!sessionId) {
+            await this.startSession();
+        }
+
+        const milestone = this.milestoneManager.createMilestone(
+            name,
+            intent,
+            this.storageData.activeSessionId!,
+            options
+        );
+
+        this.storageData.milestones.push(milestone);
+        this.storageData.activeMilestoneId = milestone.id;
+        await this.saveStorageData();
+        this._onMilestoneChanged.fire(milestone);
+        return milestone;
+    }
+
+    /**
+     * Complete the active milestone
+     */
+    public async completeMilestone(
+        milestoneId?: string,
+        options?: { createGitCommit?: boolean; commitMessage?: string }
+    ): Promise<{ milestone: Milestone; gitCommitHash?: string } | undefined> {
+        const id = milestoneId ?? this.storageData.activeMilestoneId;
+        if (!id) { return undefined; }
+
+        const milestone = this.storageData.milestones.find(m => m.id === id);
+        if (!milestone || milestone.status !== MilestoneStatus.Active) { return undefined; }
+
+        const linkedCheckpoints = this.storageData.checkpoints.filter(
+            cp => milestone.checkpointIds.includes(cp.id)
+        );
+
+        const result = await this.milestoneManager.completeMilestone(
+            milestone,
+            linkedCheckpoints,
+            options
+        );
+
+        if (this.storageData.activeMilestoneId === id) {
+            this.storageData.activeMilestoneId = undefined;
+        }
+
+        await this.saveStorageData();
+        this._onMilestoneChanged.fire(milestone);
+        return { milestone, gitCommitHash: result.gitCommitHash };
+    }
+
+    /**
+     * Abandon the active milestone
+     */
+    public async abandonMilestone(milestoneId?: string): Promise<Milestone | undefined> {
+        const id = milestoneId ?? this.storageData.activeMilestoneId;
+        if (!id) { return undefined; }
+
+        const milestone = this.storageData.milestones.find(m => m.id === id);
+        if (!milestone || milestone.status !== MilestoneStatus.Active) { return undefined; }
+
+        this.milestoneManager.abandonMilestone(milestone);
+
+        if (this.storageData.activeMilestoneId === id) {
+            this.storageData.activeMilestoneId = undefined;
+        }
+
+        await this.saveStorageData();
+        this._onMilestoneChanged.fire(undefined);
+        return milestone;
+    }
+
+    /**
+     * Get the currently active milestone
+     */
+    public getActiveMilestone(): Milestone | undefined {
+        if (!this.storageData.activeMilestoneId) { return undefined; }
+        return this.storageData.milestones.find(m => m.id === this.storageData.activeMilestoneId);
+    }
+
+    /**
+     * Get a milestone by ID
+     */
+    public getMilestone(id: string): Milestone | undefined {
+        return this.storageData.milestones.find(m => m.id === id);
+    }
+
+    /**
+     * Get all milestones, optionally filtered by status
+     */
+    public getMilestones(status?: MilestoneStatus): Milestone[] {
+        const milestones = [...this.storageData.milestones].sort((a, b) => b.createdAt - a.createdAt);
+        if (status !== undefined) {
+            return milestones.filter(m => m.status === status);
+        }
+        return milestones;
+    }
+
+    /**
+     * Get checkpoints belonging to a specific milestone
+     */
+    public getMilestoneCheckpoints(milestoneId: string): Checkpoint[] {
+        const milestone = this.getMilestone(milestoneId);
+        if (!milestone) { return []; }
+        return this.storageData.checkpoints
+            .filter(cp => milestone.checkpointIds.includes(cp.id))
+            .sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    /**
+     * Update milestone metadata
+     */
+    public async updateMilestone(
+        milestoneId: string,
+        updates: { name?: string; intent?: string; description?: string; tags?: string[] }
+    ): Promise<boolean> {
+        const milestone = this.getMilestone(milestoneId);
+        if (!milestone) { return false; }
+
+        this.milestoneManager.updateMilestone(milestone, updates);
+        await this.saveStorageData();
+        this._onMilestoneChanged.fire(milestone);
+        return true;
+    }
+
+    /**
+     * Delete a milestone (but keep its checkpoints)
+     */
+    public async deleteMilestone(milestoneId: string): Promise<boolean> {
+        const index = this.storageData.milestones.findIndex(m => m.id === milestoneId);
+        if (index === -1) { return false; }
+
+        // Unlink checkpoints from this milestone
+        for (const cp of this.storageData.checkpoints) {
+            if (cp.milestoneId === milestoneId) {
+                cp.milestoneId = undefined;
+            }
+        }
+
+        if (this.storageData.activeMilestoneId === milestoneId) {
+            this.storageData.activeMilestoneId = undefined;
+        }
+
+        this.storageData.milestones.splice(index, 1);
+        await this.saveStorageData();
+        this._onMilestoneChanged.fire(undefined);
+        return true;
+    }
+
+    /** Expose milestoneManager for direct event subscriptions */
+    public getMilestoneManager(): MilestoneManager {
+        return this.milestoneManager;
+    }
+
+    /**
+     * Get the pre-milestone file states so the RollbackManager can restore them.
+     * Returns each file's content as it was BEFORE the first checkpoint of the milestone.
+     */
+    public getMilestonePreState(milestoneId: string): Array<{ path: string; previousContent?: string; changeType: import('./types').FileChangeType }> {
+        const milestone = this.getMilestone(milestoneId);
+        if (!milestone) { return []; }
+
+        const linked = this.getMilestoneCheckpoints(milestoneId);
+        if (linked.length === 0) { return []; }
+
+        // Earliest checkpoint recorded the "before" snapshot
+        const first = linked[0];
+        return first.changedFiles.map(f => ({
+            path: f.path,
+            previousContent: f.previousContent,
+            changeType: f.changeType
+        }));
+    }
+
+    /**
+     * Export milestones to a human- and AI-readable intent file (.vibe/INTENT.md)
+     * This file is auto-updated whenever milestones change so that AI agents always
+     * have up-to-date context about WHY the code was modified.
+     */
+    public async exportIntentFile(): Promise<void> {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) { return; }
+
+        const milestones = this.getMilestones();
+        if (milestones.length === 0) { return; }
+
+        const lines: string[] = [
+            '# Vibe Code Guardian — Intent Log',
+            '',
+            '> This file is auto-generated by Vibe Code Guardian.',
+            '> It maps **why** each set of code changes was made.',
+            '> Both developers and AI agents should read this to understand the codebase evolution.',
+            ''
+        ];
+
+        const active = milestones.filter(m => m.status === MilestoneStatus.Active);
+        const completed = milestones.filter(m => m.status === MilestoneStatus.Completed);
+        const abandoned = milestones.filter(m => m.status === MilestoneStatus.Abandoned);
+
+        if (active.length > 0) {
+            lines.push('## 🟢 Active Work');
+            lines.push('');
+            for (const m of active) {
+                lines.push(...this.formatMilestoneSection(m));
+            }
+        }
+
+        if (completed.length > 0) {
+            lines.push('## ✅ Completed');
+            lines.push('');
+            for (const m of completed) {
+                lines.push(...this.formatMilestoneSection(m));
+            }
+        }
+
+        if (abandoned.length > 0) {
+            lines.push('## 🚫 Abandoned');
+            lines.push('');
+            for (const m of abandoned) {
+                lines.push(...this.formatMilestoneSection(m));
+            }
+        }
+
+        const content = lines.join('\n');
+
+        try {
+            const vibeDir = vscode.Uri.joinPath(vscode.Uri.file(workspaceRoot), '.vibe');
+            await vscode.workspace.fs.createDirectory(vibeDir);
+            const intentFile = vscode.Uri.joinPath(vibeDir, 'INTENT.md');
+            await vscode.workspace.fs.writeFile(intentFile, Buffer.from(content, 'utf8'));
+        } catch (error) {
+            console.warn('Failed to write intent file:', error);
+        }
+    }
+
+    private formatMilestoneSection(m: Milestone): string[] {
+        const lines: string[] = [];
+        const date = new Date(m.createdAt).toISOString().split('T')[0];
+        lines.push(`### ${m.name}`);
+        lines.push('');
+        lines.push(`**Intent (WHY):** ${m.intent}`);
+        if (m.description) {
+            lines.push('');
+            lines.push(`**Context:** ${m.description}`);
+        }
+        lines.push('');
+        lines.push(`- **Date:** ${date}`);
+        lines.push(`- **Status:** ${m.status}`);
+        if (m.gitCommitHash) {
+            lines.push(`- **Commit:** \`${m.gitCommitHash}\``);
+        }
+        if (m.changedFiles.length > 0) {
+            lines.push(`- **Files changed:**`);
+            for (const f of m.changedFiles) {
+                const rel = f.path.replace(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '', '').replace(/^[/\\]/, '');
+                lines.push(`  - \`${rel}\``);
+            }
+        }
+        if (m.tags.length > 0) {
+            lines.push(`- **Tags:** ${m.tags.join(', ')}`);
+        }
+        lines.push('');
+        return lines;
+    }
+
     /**
      * Clear all data (for testing/reset)
      */
@@ -813,6 +1115,8 @@ export class CheckpointManager {
             checkpoints: [],
             sessions: [],
             activeSessionId: undefined,
+            milestones: [],
+            activeMilestoneId: undefined,
             settings: DEFAULT_SETTINGS
         };
         await this.saveStorageData();
@@ -822,5 +1126,7 @@ export class CheckpointManager {
         this._onCheckpointCreated.dispose();
         this._onCheckpointDeleted.dispose();
         this._onSessionChanged.dispose();
+        this._onMilestoneChanged.dispose();
+        this.milestoneManager.dispose();
     }
 }

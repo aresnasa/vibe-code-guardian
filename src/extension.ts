@@ -10,7 +10,7 @@ import { AIDetector } from './aiDetector';
 import { RollbackManager, DiffContentProvider } from './rollbackManager';
 import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
 import { StateMonitor } from './stateMonitor';
-import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage, NotificationLevel, PushStrategy, TrackingMode } from './types';
+import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLanguage, NotificationLevel, PushStrategy, TrackingMode, MilestoneStatus } from './types';
 import { getLanguageDisplayName, getNextLanguage, getNotificationLevelDisplayName, getNextNotificationLevel, getPushStrategyDisplayName, getNextPushStrategy, getTrackingModeDisplayName, getNextTrackingMode } from './languageConfig';
 import { GitGraphTreeProvider, GitGraphTreeItem } from './gitGraphTreeProvider';
 import { GitGraphWebviewManager } from './gitGraphWebview';
@@ -207,6 +207,7 @@ let languageStatusBarItem: vscode.StatusBarItem;
 let notificationStatusBarItem: vscode.StatusBarItem;
 let pushStrategyStatusBarItem: vscode.StatusBarItem;
 let trackingModeStatusBarItem: vscode.StatusBarItem;
+let milestoneStatusBarItem: vscode.StatusBarItem;
 
 async function syncSettingsFromConfiguration(): Promise<void> {
     const config = vscode.workspace.getConfiguration('vibeCodeGuardian');
@@ -362,6 +363,7 @@ export async function activate(context: vscode.ExtensionContext) {
         createNotificationStatusBar(context);
         createPushStrategyStatusBar(context);
         createTrackingModeStatusBar(context);
+        createMilestoneStatusBar(context);
 
         // Show welcome and auto-start session
         vscode.window.showInformationMessage('🎮 Vibe Code Guardian activated!');
@@ -1339,6 +1341,367 @@ function registerCommands(context: vscode.ExtensionContext) {
     // Git Graph Commands
     // ============================================
 
+    // ============================================
+    // Milestone Commands
+    // ============================================
+
+    // Start Milestone
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.startMilestone', async () => {
+            const name = await vscode.window.showInputBox({
+                prompt: '🎯 Milestone name (WHAT you are doing)',
+                placeHolder: 'e.g., Add user authentication'
+            });
+            if (!name) { return; }
+
+            const intent = await vscode.window.showInputBox({
+                prompt: '💡 Intent (WHY this change is needed)',
+                placeHolder: 'e.g., Users need to log in before accessing paid content'
+            });
+            if (!intent) { return; }
+
+            const description = await vscode.window.showInputBox({
+                prompt: '📝 Additional context (optional)',
+                placeHolder: 'e.g., Uses JWT tokens, OAuth2 flow with Google'
+            });
+
+            const milestone = await checkpointManager.startMilestone(name, intent, {
+                description: description || undefined
+            });
+            updateMilestoneStatusBar(milestone.name);
+            await checkpointManager.exportIntentFile();
+            vscode.window.showInformationMessage(`🎯 Milestone started: ${milestone.name}`);
+            treeProvider.refresh();
+        })
+    );
+
+    // Complete Milestone
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.completeMilestone', async () => {
+            const active = checkpointManager.getActiveMilestone();
+            if (!active) {
+                // Let user pick from active milestones
+                const milestones = checkpointManager.getMilestones(MilestoneStatus.Active);
+                if (milestones.length === 0) {
+                    vscode.window.showWarningMessage('No active milestones.');
+                    return;
+                }
+                const selected = await vscode.window.showQuickPick(
+                    milestones.map(m => ({
+                        label: m.name,
+                        description: m.intent,
+                        detail: `${m.checkpointIds.length} checkpoints · ${m.changedFiles.length} files`,
+                        milestoneId: m.id
+                    })),
+                    { placeHolder: 'Select a milestone to complete' }
+                );
+                if (!selected) { return; }
+
+                const createCommit = await vscode.window.showQuickPick(
+                    [
+                        { label: '$(git-commit) Create Git commit', description: 'Squash into a single meaningful commit', value: true },
+                        { label: '$(archive) Keep local only', description: 'No Git commit, local snapshot only', value: false }
+                    ],
+                    { placeHolder: 'How to record this milestone?' }
+                );
+                if (!createCommit) { return; }
+
+                const result = await checkpointManager.completeMilestone(selected.milestoneId, {
+                    createGitCommit: createCommit.value
+                });
+                if (result) {
+                    await checkpointManager.exportIntentFile();
+                    vscode.window.showInformationMessage(
+                        `✅ Milestone completed: ${result.milestone.name}` +
+                        (result.gitCommitHash ? ` (${result.gitCommitHash.substring(0, 7)})` : '')
+                    );
+                }
+            } else {
+                const createCommit = await vscode.window.showQuickPick(
+                    [
+                        { label: '$(git-commit) Create Git commit', description: 'Squash into a single meaningful commit', value: true },
+                        { label: '$(archive) Keep local only', description: 'No Git commit, local snapshot only', value: false }
+                    ],
+                    { placeHolder: `Complete "${active.name}" — How to record?` }
+                );
+                if (!createCommit) { return; }
+
+                const result = await checkpointManager.completeMilestone(undefined, {
+                    createGitCommit: createCommit.value
+                });
+                if (result) {
+                    await checkpointManager.exportIntentFile();
+                    vscode.window.showInformationMessage(
+                        `✅ Milestone completed: ${result.milestone.name}` +
+                        (result.gitCommitHash ? ` (${result.gitCommitHash.substring(0, 7)})` : '')
+                    );
+                }
+            }
+            updateMilestoneStatusBar();
+            treeProvider.refresh();
+        })
+    );
+
+    // Abandon Milestone
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.abandonMilestone', async () => {
+            const active = checkpointManager.getActiveMilestone();
+            const milestones = active
+                ? [active]
+                : checkpointManager.getMilestones(MilestoneStatus.Active);
+
+            if (milestones.length === 0) {
+                vscode.window.showWarningMessage('No active milestones.');
+                return;
+            }
+
+            let targetId: string;
+            if (milestones.length === 1) {
+                targetId = milestones[0].id;
+            } else {
+                const selected = await vscode.window.showQuickPick(
+                    milestones.map(m => ({ label: m.name, description: m.intent, id: m.id })),
+                    { placeHolder: 'Select a milestone to abandon' }
+                );
+                if (!selected) { return; }
+                targetId = selected.id;
+            }
+
+            const confirm = await vscode.window.showWarningMessage(
+                `Abandon milestone "${milestones.find(m => m.id === targetId)?.name}"? Checkpoints will be kept.`,
+                { modal: true },
+                'Abandon',
+                'Cancel'
+            );
+            if (confirm !== 'Abandon') { return; }
+
+            const result = await checkpointManager.abandonMilestone(targetId);
+            if (result) {
+                vscode.window.showInformationMessage(`🚫 Milestone abandoned: ${result.name}`);
+            }
+            updateMilestoneStatusBar();
+            treeProvider.refresh();
+        })
+    );
+
+    // Show Milestones
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showMilestones', async () => {
+            const milestones = checkpointManager.getMilestones();
+            if (milestones.length === 0) {
+                vscode.window.showInformationMessage('No milestones yet. Start one with "Start Milestone".');
+                return;
+            }
+
+            const statusIcon = (s: MilestoneStatus) =>
+                s === MilestoneStatus.Active ? '🟢' : s === MilestoneStatus.Completed ? '✅' : '🚫';
+
+            const items = milestones.map(m => ({
+                label: `${statusIcon(m.status)} ${m.name}`,
+                description: m.intent,
+                detail: `${m.checkpointIds.length} checkpoints · ${m.changedFiles.length} files · ${new Date(m.createdAt).toLocaleString()}`,
+                milestoneId: m.id
+            }));
+
+            const selected = await vscode.window.showQuickPick(items, {
+                placeHolder: 'Browse milestones',
+                matchOnDescription: true,
+                matchOnDetail: true
+            });
+
+            if (!selected) { return; }
+
+            const milestone = checkpointManager.getMilestone(selected.milestoneId);
+            if (!milestone) { return; }
+
+            const actions = [
+                { label: '$(list-tree) View checkpoints', action: 'checkpoints' },
+                ...(milestone.status === MilestoneStatus.Active
+                    ? [
+                        { label: '$(check) Complete', action: 'complete' },
+                        { label: '$(close) Abandon', action: 'abandon' },
+                        { label: '$(edit) Edit intent', action: 'edit' }
+                    ]
+                    : []),
+                { label: '$(trash) Delete', action: 'delete' }
+            ];
+
+            const action = await vscode.window.showQuickPick(actions, {
+                placeHolder: `${milestone.name} — ${milestone.intent}`
+            });
+
+            if (!action) { return; }
+            switch (action.action) {
+                case 'checkpoints': {
+                    const cps = checkpointManager.getMilestoneCheckpoints(milestone.id);
+                    if (cps.length === 0) {
+                        vscode.window.showInformationMessage('No checkpoints in this milestone yet.');
+                    } else {
+                        const cpItems = cps.map(cp => ({
+                            label: cp.name,
+                            description: `${cp.changedFiles.length} files`,
+                            detail: new Date(cp.timestamp).toLocaleString()
+                        }));
+                        await vscode.window.showQuickPick(cpItems, {
+                            placeHolder: `Checkpoints in "${milestone.name}"`
+                        });
+                    }
+                    break;
+                }
+                case 'complete':
+                    await vscode.commands.executeCommand('vibeCodeGuardian.completeMilestone');
+                    break;
+                case 'abandon':
+                    await vscode.commands.executeCommand('vibeCodeGuardian.abandonMilestone');
+                    break;
+                case 'edit': {
+                    const newIntent = await vscode.window.showInputBox({
+                        prompt: 'Update intent',
+                        value: milestone.intent
+                    });
+                    if (newIntent) {
+                        await checkpointManager.updateMilestone(milestone.id, { intent: newIntent });
+                        vscode.window.showInformationMessage(`Updated intent for "${milestone.name}"`);
+                    }
+                    break;
+                }
+                case 'delete': {
+                    const confirmDel = await vscode.window.showWarningMessage(
+                        `Delete milestone "${milestone.name}"? Checkpoints will be kept.`,
+                        { modal: true }, 'Delete', 'Cancel'
+                    );
+                    if (confirmDel === 'Delete') {
+                        await checkpointManager.deleteMilestone(milestone.id);
+                        vscode.window.showInformationMessage('Milestone deleted.');
+                        treeProvider.refresh();
+                    }
+                    break;
+                }
+            }
+        })
+    );
+
+    // Rollback to Before Milestone  
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.rollbackToMilestone', async (item?: import('./timelineTreeProvider').TimelineItem) => {
+            let milestoneId: string | undefined = item?.milestoneId;
+
+            if (!milestoneId) {
+                const milestones = checkpointManager.getMilestones();
+                if (milestones.length === 0) {
+                    vscode.window.showWarningMessage('No milestones yet.');
+                    return;
+                }
+                const statusIcon = (s: MilestoneStatus) =>
+                    s === MilestoneStatus.Active ? '🟢' : s === MilestoneStatus.Completed ? '✅' : '🚫';
+                const selected = await vscode.window.showQuickPick(
+                    milestones.map(m => ({
+                        label: `${statusIcon(m.status)} ${m.name}`,
+                        description: m.intent,
+                        detail: `${m.checkpointIds.length} checkpoints · ${m.changedFiles.length} files`,
+                        milestoneId: m.id
+                    })),
+                    { placeHolder: 'Select a milestone to rollback to (before it started)' }
+                );
+                if (!selected) { return; }
+                milestoneId = selected.milestoneId;
+            }
+
+            try {
+                const result = await rollbackManager.rollbackToMilestone(milestoneId);
+                if (result.success) {
+                    vscode.window.showInformationMessage(result.message);
+                    treeProvider.refresh();
+                } else if (result.message !== 'Cancelled') {
+                    vscode.window.showErrorMessage(`Rollback failed: ${result.message}`);
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Rollback failed: ${error}`);
+            }
+        })
+    );
+
+    // Show Milestone Details (invoked from timeline tree item click)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showMilestoneDetails', async (milestoneId: string) => {
+            const milestone = checkpointManager.getMilestone(milestoneId);
+            if (!milestone) {
+                vscode.window.showWarningMessage('Milestone not found.');
+                return;
+            }
+
+            const isActive = milestone.status === MilestoneStatus.Active;
+            const actions = [
+                ...(isActive ? [
+                    { label: '$(check) Complete milestone', action: 'complete' },
+                    { label: '$(discard) Rollback to before this milestone', action: 'rollback' },
+                    { label: '$(close) Abandon', action: 'abandon' },
+                    { label: '$(edit) Edit intent', action: 'edit' }
+                ] : [
+                    { label: '$(discard) Rollback to before this milestone', action: 'rollback' }
+                ]),
+                { label: '$(trash) Delete', action: 'delete' }
+            ];
+
+            const selected = await vscode.window.showQuickPick(actions, {
+                placeHolder: `🎯 ${milestone.name} — ${milestone.intent}`
+            });
+            if (!selected) { return; }
+
+            switch (selected.action) {
+                case 'complete':
+                    await vscode.commands.executeCommand('vibeCodeGuardian.completeMilestone');
+                    break;
+                case 'rollback':
+                    await vscode.commands.executeCommand('vibeCodeGuardian.rollbackToMilestone', { milestoneId });
+                    break;
+                case 'abandon':
+                    await vscode.commands.executeCommand('vibeCodeGuardian.abandonMilestone');
+                    break;
+                case 'edit': {
+                    const newIntent = await vscode.window.showInputBox({
+                        prompt: 'Update intent (WHY)',
+                        value: milestone.intent
+                    });
+                    if (newIntent) {
+                        await checkpointManager.updateMilestone(milestone.id, { intent: newIntent });
+                        await checkpointManager.exportIntentFile();
+                        treeProvider.refresh();
+                    }
+                    break;
+                }
+                case 'delete': {
+                    const confirmDel = await vscode.window.showWarningMessage(
+                        `Delete milestone "${milestone.name}"? Checkpoints will be kept.`,
+                        { modal: true }, 'Delete', 'Cancel'
+                    );
+                    if (confirmDel === 'Delete') {
+                        await checkpointManager.deleteMilestone(milestone.id);
+                        await checkpointManager.exportIntentFile();
+                        treeProvider.refresh();
+                    }
+                    break;
+                }
+            }
+        })
+    );
+
+    // Toggle Timeline View Mode (Milestone / Session / All)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.toggleTimelineView', async () => {
+            const modes = [
+                { label: '$(target) Milestone View', description: 'Group by intent & milestone (recommended)', mode: 'milestone' as const },
+                { label: '$(game) Session View', description: 'Group by coding session', mode: 'session' as const },
+                { label: '$(history) All Checkpoints', description: 'Show all checkpoints by date', mode: 'all' as const },
+                { label: '$(star) Starred', description: 'Only starred checkpoints', mode: 'starred' as const }
+            ];
+            const selected = await vscode.window.showQuickPick(modes, { placeHolder: 'Select timeline view mode' });
+            if (selected) {
+                treeProvider.setViewMode(selected.mode);
+            }
+        })
+    );
+
     // Show Git Graph (opens WebView panel)
     context.subscriptions.push(
         vscode.commands.registerCommand('vibeCodeGuardian.showGitGraph', async () => {
@@ -1506,9 +1869,10 @@ function setupEventListeners(context: vscode.ExtensionContext) {
         treeProvider.refresh();
         gitGraphTreeProvider.refresh();
     });
-    checkpointManager.onSessionChanged(() => {
+    checkpointManager.onMilestoneChanged(() => {
         treeProvider.refresh();
         gitGraphTreeProvider.refresh();
+        updateMilestoneStatusBar();
     });
 }
 
@@ -1646,6 +2010,33 @@ function createTrackingModeStatusBar(context: vscode.ExtensionContext) {
 function updateTrackingModeStatusBar(mode: TrackingMode) {
     if (trackingModeStatusBarItem) {
         trackingModeStatusBarItem.text = getTrackingModeDisplayName(mode);
+    }
+}
+
+/**
+ * Creates the milestone status bar item
+ */
+function createMilestoneStatusBar(context: vscode.ExtensionContext) {
+    milestoneStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    milestoneStatusBarItem.command = 'vibeCodeGuardian.showMilestones';
+    milestoneStatusBarItem.tooltip = 'Active milestone — click to manage milestones';
+    updateMilestoneStatusBar();
+    milestoneStatusBarItem.show();
+    context.subscriptions.push(milestoneStatusBarItem);
+}
+
+/**
+ * Updates the milestone status bar item text
+ */
+function updateMilestoneStatusBar(activeName?: string) {
+    if (!milestoneStatusBarItem) { return; }
+    const name = activeName ?? checkpointManager?.getActiveMilestone()?.name;
+    if (name) {
+        milestoneStatusBarItem.text = `$(milestone) ${name}`;
+        milestoneStatusBarItem.backgroundColor = undefined;
+    } else {
+        milestoneStatusBarItem.text = '$(milestone) No Milestone';
+        milestoneStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     }
 }
 
