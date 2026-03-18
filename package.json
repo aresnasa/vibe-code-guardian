@@ -471,7 +471,7 @@
             "milestone",
             "all"
           ],
-          "default": "milestone",
+          "default": "none",
           "enumDescriptions": [
             "None - Never push to remote automatically",
             "Milestone Only - Only push manual checkpoints to remote (recommended)",
@@ -492,10 +492,10 @@
             "full",
             "local-only"
           ],
-          "default": "full",
+          "default": "local-only",
           "enumDescriptions": [
             "Full Tracking - plugin checkpoints create local Git commits",
-            "Local Backup - plugin stores snapshots locally and never creates plugin Git commits"
+            "Local Backup - plugin stores snapshots locally and never creates plugin Git commits (recommended for shared repositories)"
           ],
           "description": "Controls whether Vibe Code Guardian writes Git commits. Use 'local-only' to keep user Git history clean while preserving local rollback checkpoints."
         }

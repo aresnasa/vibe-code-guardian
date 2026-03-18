@@ -224,9 +224,9 @@ async function syncSettingsFromConfiguration(): Promise<void> {
         notificationThrottle: config.get<number>('notificationThrottle', 5000),
         maxNotificationWindows: config.get<number>('maxNotificationWindows', 3),
         commitLanguage: config.get<CommitLanguage>('commitLanguage', 'auto'),
-        pushStrategy: config.get<PushStrategy>('pushStrategy', 'milestone'),
+        pushStrategy: config.get<PushStrategy>('pushStrategy', 'none'),
         maxFileSize: config.get<number>('maxFileSizeKB', 512) * 1024,
-        trackingMode: config.get<TrackingMode>('trackingMode', 'full')
+        trackingMode: config.get<TrackingMode>('trackingMode', 'local-only')
     });
 }
 

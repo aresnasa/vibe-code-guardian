@@ -10,6 +10,7 @@ Game-like checkpoint system for AI-assisted coding sessions. Save, load, and rol
 - **⏪ Rollback** - Restore code to any checkpoint instantly
 - **📊 Diff View** - See what changed since any checkpoint
 - **🎮 Sessions** - Organize checkpoints by coding session
+- **📦 Local Backup Mode** - Default mode keeps plugin checkpoints local so shared Git history stays clean
 
 ## Available On
 
@@ -32,6 +33,7 @@ Open Command Palette (`Ctrl+Shift+P`) and type "Vibe Guardian":
 - **Quick Save** - Fast checkpoint without prompt
 - **Rollback to Checkpoint** - Restore to selected checkpoint
 - **View Changes** - Show diff from checkpoint
+- **Toggle Tracking Mode** - Switch between full Git tracking and local-only backup
 - **Start/End Session** - Manage coding sessions
 
 ## Settings
@@ -42,6 +44,17 @@ Open Command Palette (`Ctrl+Shift+P`) and type "Vibe Guardian":
 | `autoSaveIntervalMinutes` | `5` | Minutes between auto-saves |
 | `autoCheckpointOnAIChanges` | `true` | Checkpoint on AI edits |
 | `maxCheckpointsPerSession` | `50` | Max checkpoints per session |
+| `trackingMode` | `local-only` | Keep checkpoints local and avoid plugin Git commits |
+| `pushStrategy` | `none` | Never auto-push plugin history |
+
+## Shared Repository Recommendation
+
+For team repositories and internal projects, keep `trackingMode=local-only`.
+
+- Plugin checkpoints stay on the developer machine
+- User-authored commits remain the only meaningful remote history
+- Rollback still works from local file snapshots
+- If you explicitly want plugin-created local Git checkpoints, switch to `full`
 
 ## Requirements
 

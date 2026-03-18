@@ -311,6 +311,6 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
     ],
     maxFileSize: 512 * 1024, // 512KB
     commitLanguage: 'auto',
-    pushStrategy: 'milestone', // Only push milestone checkpoints to remote
-    trackingMode: 'full' // Full git tracking by default
+    pushStrategy: 'none', // Never push plugin-generated history by default
+    trackingMode: 'local-only' // Keep plugin history local by default
 };
