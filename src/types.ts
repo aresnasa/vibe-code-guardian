@@ -95,6 +95,9 @@ export type NotificationLevel = 'all' | 'milestone' | 'none';
 /** Push strategy for remote repository */
 export type PushStrategy = 'none' | 'milestone' | 'all';
 
+/** Tracking mode: 'full' creates git commits for every checkpoint, 'local-only' stores snapshots without git commits */
+export type TrackingMode = 'full' | 'local-only';
+
 export interface CodingSession {
     /** Unique session identifier */
     id: string;
@@ -162,6 +165,8 @@ export interface GuardianSettings {
     notificationThrottle: number;
     /** Maximum number of notification windows to show before auto-dismissing (default: 3) */
     maxNotificationWindows: number;
+    /** Tracking mode: 'full' = git commits for every checkpoint, 'local-only' = file snapshots only, no git commits from plugin */
+    trackingMode: TrackingMode;
 }
 
 export interface RollbackResult {
@@ -306,5 +311,6 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
     ],
     maxFileSize: 512 * 1024, // 512KB
     commitLanguage: 'auto',
-    pushStrategy: 'milestone' // Only push milestone checkpoints to remote
+    pushStrategy: 'milestone', // Only push milestone checkpoints to remote
+    trackingMode: 'full' // Full git tracking by default
 };
