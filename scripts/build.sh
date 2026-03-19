@@ -181,9 +181,15 @@ do_build() {
     log_step "Checking environment"
     log_success "Node $(node --version)  •  npm $(npm --version)"
 
-    if [ ! -d "node_modules" ]; then
+    if [ ! -d "node_modules" ] || [ ! -d "node_modules/@types/node" ] || [ ! -d "node_modules/@types/vscode" ]; then
         log_step "Installing dependencies"
         npm install
+    fi
+
+    # Clean up pnpm residuals that may leak from Zed publish operations
+    if [ -d "node_modules/.pnpm" ]; then
+        log_warning "Removing pnpm residuals from node_modules"
+        rm -rf node_modules/.pnpm
     fi
 
     log_step "Type checking"
@@ -354,7 +360,10 @@ zed_build_wasm() {
 zed_push_submodule() {
     log_step "Pushing zed submodule to GitHub"
 
-    pushd "$ZED_SUBMODULE_DIR" > /dev/null
+    pushd "$ZED_SUBMODULE_DIR" > /dev/null || {
+        log_error "Failed to enter zed submodule directory"
+        return 1
+    }
 
     local branch
     branch=$(git rev-parse --abbrev-ref HEAD)
@@ -362,7 +371,11 @@ zed_push_submodule() {
     if [ "$DRY_RUN" = "true" ]; then
         log_warning "[DRY RUN] Would push to origin/${branch}"
     else
-        git push origin "$branch"
+        if ! git push origin "$branch" 2>&1; then
+            log_error "Failed to push zed submodule to origin/${branch}"
+            popd > /dev/null
+            return 1
+        fi
     fi
 
     local commit
@@ -392,9 +405,23 @@ zed_create_pr() {
 
     # ── Clone the fork ────────────────────────────────────────────────────
     log_info "Cloning fork → ${work_dir}/extensions"
-    gh repo clone "$ZED_EXTENSIONS_FORK" "${work_dir}/extensions" -- --depth=1 2>&1
+    if ! gh repo clone "$ZED_EXTENSIONS_FORK" "${work_dir}/extensions" -- --depth=1 2>&1; then
+        log_error "Failed to clone fork ${ZED_EXTENSIONS_FORK}"
+        rm -rf "$work_dir"
+        return 1
+    fi
 
-    pushd "${work_dir}/extensions" > /dev/null
+    if [ ! -d "${work_dir}/extensions/.git" ]; then
+        log_error "Clone directory does not contain a valid git repo"
+        rm -rf "$work_dir"
+        return 1
+    fi
+
+    pushd "${work_dir}/extensions" > /dev/null || {
+        log_error "Failed to enter clone directory"
+        rm -rf "$work_dir"
+        return 1
+    }
 
     # Set upstream
     git remote add upstream "https://github.com/${ZED_EXTENSIONS_UPSTREAM}.git" 2>/dev/null || true
@@ -451,13 +478,11 @@ zed_create_pr() {
 
     git add extensions.toml
 
-    # ── Sort extensions (if pnpm available) ───────────────────────────────
-    if command_exists pnpm; then
-        log_info "Running pnpm sort-extensions"
-        pnpm install --frozen-lockfile 2>/dev/null || pnpm install 2>/dev/null || true
-        pnpm sort-extensions 2>/dev/null || true
-        git add extensions.toml .gitmodules 2>/dev/null || true
-    fi
+    # ── Sort extensions (skip pnpm to avoid polluting main project) ─────
+    # Note: pnpm install in the zed-industries/extensions clone can leak
+    # packages into the main project's node_modules via pnpm hoisting.
+    # The sort is cosmetic only — the PR works fine without it.
+    git add .gitmodules 2>/dev/null || true
 
     # ── Commit & push ─────────────────────────────────────────────────────
     if git diff --cached --quiet; then
@@ -476,7 +501,12 @@ zed_create_pr() {
         return 0
     fi
 
-    git push origin "$pr_branch" --force
+    if ! git push origin "$pr_branch" --force 2>&1; then
+        log_error "Failed to push branch ${pr_branch}"
+        popd > /dev/null
+        rm -rf "$work_dir"
+        return 1
+    fi
 
     # ── Create PR via gh CLI ──────────────────────────────────────────────
     local pr_url
@@ -510,6 +540,13 @@ A game-like checkpoint/save system for AI-assisted coding (vibe coding).
 - [x] \`extensions.toml\` version matches \`extension.toml\`
 - [x] Extension ID does not contain \"zed\"" 2>&1)
 
+    if [ -z "$pr_url" ] || echo "$pr_url" | grep -qi "error\|failed"; then
+        log_error "PR creation failed: ${pr_url}"
+        popd > /dev/null
+        rm -rf "$work_dir"
+        return 1
+    fi
+
     log_success "PR created: ${pr_url}"
 
     popd > /dev/null
@@ -526,10 +563,22 @@ publish_zed() {
 
     log_banner "🔵 Publishing Zed Extension to zed.dev"
 
-    zed_update_submodule "$version"
-    zed_build_wasm
-    zed_push_submodule
-    zed_create_pr "$version"
+    zed_update_submodule "$version" || {
+        log_error "Failed to update Zed submodule"
+        return 1
+    }
+    zed_build_wasm || {
+        log_error "Zed WASM build failed"
+        return 1
+    }
+    zed_push_submodule || {
+        log_error "Failed to push Zed submodule"
+        return 1
+    }
+    zed_create_pr "$version" || {
+        log_error "Failed to create Zed PR"
+        return 1
+    }
 
     log_success "Zed extension publish flow completed"
     log_info "Extension page: https://zed.dev/extensions?query=${ZED_EXTENSION_ID}"
