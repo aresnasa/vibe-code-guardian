@@ -290,19 +290,31 @@ publish_vscode() {
         return 0
     fi
 
-    if npx @vscode/vsce publish; then
-        log_success "Published v${version} to VS Code Marketplace"
-        log_info "URL: https://marketplace.visualstudio.com/items?itemName=${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}"
-    else
+    local max_retries=3
+    local attempt=1
+    while [ $attempt -le $max_retries ]; do
+        if npx @vscode/vsce publish; then
+            log_success "Published v${version} to VS Code Marketplace"
+            log_info "URL: https://marketplace.visualstudio.com/items?itemName=${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}"
+            return 0
+        fi
+
         local rc=$?
         # "already exists" is not a real failure when re-publishing the same version
         if npx @vscode/vsce show "${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}" --json 2>/dev/null | grep -q "\"version\":\"${version}\""; then
             log_warning "v${version} already exists on Marketplace — skipping"
+            return 0
+        fi
+
+        if [ $attempt -lt $max_retries ]; then
+            log_warning "vsce publish attempt ${attempt}/${max_retries} failed (code ${rc}) – retrying in 5s..."
+            sleep 5
         else
-            log_error "vsce publish exited with code ${rc}"
+            log_error "vsce publish failed after ${max_retries} attempts (code ${rc})"
             return 1
         fi
-    fi
+        ((attempt++))
+    done
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -388,45 +400,68 @@ zed_push_submodule() {
     git add "$ZED_SUBMODULE_DIR"
 }
 
-# Step 4: Clone fork, update submodule pointer + extensions.toml, create PR
+# Step 4: Use persistent local fork, update submodule pointer + extensions.toml, create PR
 zed_create_pr() {
     local version="$1"
-    local work_dir
-    work_dir=$(mktemp -d)
+    local cache_dir="${HOME}/.cache/vibe-code-guardian/zed-extensions-fork"
     local pr_branch="update-${ZED_EXTENSION_ID}-v${version}"
 
     log_step "Preparing PR to ${ZED_EXTENSIONS_UPSTREAM}"
 
-    # ── Ensure the fork exists ────────────────────────────────────────────
+    # ── Ensure the fork exists on GitHub ──────────────────────────────────
     if ! gh repo view "$ZED_EXTENSIONS_FORK" --json name &>/dev/null; then
         log_info "Fork not found. Forking ${ZED_EXTENSIONS_UPSTREAM}..."
-        gh repo fork "$ZED_EXTENSIONS_UPSTREAM" --clone=false
+        if ! gh repo fork "$ZED_EXTENSIONS_UPSTREAM" --clone=false 2>&1; then
+            log_error "Failed to fork ${ZED_EXTENSIONS_UPSTREAM}"
+            return 1
+        fi
     fi
 
-    # ── Clone the fork ────────────────────────────────────────────────────
-    log_info "Cloning fork → ${work_dir}/extensions"
-    if ! gh repo clone "$ZED_EXTENSIONS_FORK" "${work_dir}/extensions" -- --depth=1 2>&1; then
-        log_error "Failed to clone fork ${ZED_EXTENSIONS_FORK}"
-        rm -rf "$work_dir"
-        return 1
+    # ── Clone or update the local fork cache ──────────────────────────────
+    if [ -d "${cache_dir}/.git" ]; then
+        log_info "Using cached fork → ${cache_dir}"
+        pushd "$cache_dir" > /dev/null || {
+            log_error "Failed to enter cache directory"
+            return 1
+        }
+
+        # Ensure remotes are correct
+        git remote set-url origin "https://github.com/${ZED_EXTENSIONS_FORK}.git" 2>/dev/null
+        git remote add upstream "https://github.com/${ZED_EXTENSIONS_UPSTREAM}.git" 2>/dev/null || \
+            git remote set-url upstream "https://github.com/${ZED_EXTENSIONS_UPSTREAM}.git" 2>/dev/null
+
+        # Sync with upstream
+        git checkout main 2>/dev/null || git checkout -b main
+        if ! git fetch upstream main --depth=1 2>&1; then
+            log_error "Failed to fetch upstream – check network"
+            popd > /dev/null
+            return 1
+        fi
+        git reset --hard upstream/main
+    else
+        log_info "Cloning fork → ${cache_dir}"
+        mkdir -p "$(dirname "$cache_dir")"
+        if ! gh repo clone "$ZED_EXTENSIONS_FORK" "$cache_dir" -- --depth=1 2>&1; then
+            log_error "Failed to clone fork ${ZED_EXTENSIONS_FORK}"
+            rm -rf "$cache_dir"
+            return 1
+        fi
+
+        if [ ! -d "${cache_dir}/.git" ]; then
+            log_error "Clone directory does not contain a valid git repo"
+            rm -rf "$cache_dir"
+            return 1
+        fi
+
+        pushd "$cache_dir" > /dev/null || {
+            log_error "Failed to enter clone directory"
+            return 1
+        }
+
+        git remote add upstream "https://github.com/${ZED_EXTENSIONS_UPSTREAM}.git" 2>/dev/null || true
+        git fetch upstream main --depth=1
+        git reset --hard upstream/main
     fi
-
-    if [ ! -d "${work_dir}/extensions/.git" ]; then
-        log_error "Clone directory does not contain a valid git repo"
-        rm -rf "$work_dir"
-        return 1
-    fi
-
-    pushd "${work_dir}/extensions" > /dev/null || {
-        log_error "Failed to enter clone directory"
-        rm -rf "$work_dir"
-        return 1
-    }
-
-    # Set upstream
-    git remote add upstream "https://github.com/${ZED_EXTENSIONS_UPSTREAM}.git" 2>/dev/null || true
-    git fetch upstream main --depth=1
-    git reset --hard upstream/main
 
     # ── Create branch ─────────────────────────────────────────────────────
     git checkout -b "$pr_branch"
@@ -488,7 +523,6 @@ zed_create_pr() {
     if git diff --cached --quiet; then
         log_warning "No changes to commit – PR may already be up to date"
         popd > /dev/null
-        rm -rf "$work_dir"
         return 0
     fi
 
@@ -497,14 +531,12 @@ zed_create_pr() {
     if [ "$DRY_RUN" = "true" ]; then
         log_warning "[DRY RUN] Would push branch and create PR"
         popd > /dev/null
-        rm -rf "$work_dir"
         return 0
     fi
 
     if ! git push origin "$pr_branch" --force 2>&1; then
         log_error "Failed to push branch ${pr_branch}"
         popd > /dev/null
-        rm -rf "$work_dir"
         return 1
     fi
 
@@ -543,14 +575,12 @@ A game-like checkpoint/save system for AI-assisted coding (vibe coding).
     if [ -z "$pr_url" ] || echo "$pr_url" | grep -qi "error\|failed"; then
         log_error "PR creation failed: ${pr_url}"
         popd > /dev/null
-        rm -rf "$work_dir"
         return 1
     fi
 
     log_success "PR created: ${pr_url}"
 
     popd > /dev/null
-    rm -rf "$work_dir"
 
     echo ""
     log_info "PR URL: ${pr_url}"
