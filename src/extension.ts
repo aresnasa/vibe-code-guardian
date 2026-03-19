@@ -1489,7 +1489,13 @@ function registerCommands(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('vibeCodeGuardian.showMilestones', async () => {
             const milestones = checkpointManager.getMilestones();
             if (milestones.length === 0) {
-                vscode.window.showInformationMessage('No milestones yet. Start one with "Start Milestone".');
+                const action = await vscode.window.showInformationMessage(
+                    'No milestones yet. Start one to associate your intent with code changes.',
+                    'Start Milestone'
+                );
+                if (action === 'Start Milestone') {
+                    await vscode.commands.executeCommand('vibeCodeGuardian.startMilestone');
+                }
                 return;
             }
 

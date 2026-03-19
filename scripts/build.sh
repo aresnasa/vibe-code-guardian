@@ -609,6 +609,88 @@ do_git_push() {
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TEST
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+do_test() {
+    log_banner "🧪 Running Test Suite"
+
+    local passed=0
+    local failed=0
+
+    # ── 1. Unit tests (VS Code extension API + CheckpointManager) ────────
+    log_step "Unit tests (npm test)"
+    if npm test; then
+        log_success "Unit tests passed"
+        ((passed++))
+    else
+        log_error "Unit tests FAILED"
+        ((failed++))
+    fi
+
+    # ── 2. Integration tests (run-tests.sh shell suite) ──────────────────
+    log_step "Integration tests (scripts/run-tests.sh)"
+    if bash "${PROJECT_ROOT}/scripts/run-tests.sh"; then
+        log_success "Integration tests passed"
+        ((passed++))
+    else
+        log_error "Integration tests FAILED"
+        ((failed++))
+    fi
+
+    # ── Summary ───────────────────────────────────────────────────────────
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    if [ $failed -eq 0 ]; then
+        log_success "All test suites passed ($passed/$((passed + failed)))"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        return 0
+    else
+        log_error "$failed test suite(s) FAILED (passed: $passed / total: $((passed + failed)))"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        return 1
+    fi
+}
+
+# Run tests then install the .vsix into this workspace's VS Code for manual verification
+do_local_test() {
+    log_banner "🔬 Local Extension Test"
+    local version
+    version=$(get_version)
+    local vsix="vibe-code-guardian-${version}.vsix"
+
+    # 1. Run automated tests first
+    do_test || {
+        log_error "Automated tests failed – aborting local install"
+        return 1
+    }
+
+    # 2. Build + package
+    do_build
+    do_package
+
+    # 3. Install .vsix into VS Code
+    if [ ! -f "$vsix" ]; then
+        log_error ".vsix not found: $vsix"
+        return 1
+    fi
+
+    log_step "Installing ${vsix} into VS Code for manual verification"
+    if command_exists code; then
+        if [ "$DRY_RUN" = "true" ]; then
+            log_warning "[DRY RUN] Would run: code --install-extension ${vsix}"
+        else
+            code --install-extension "$vsix"
+            log_success "Extension installed. Reload VS Code and verify milestone features."
+            log_info "Reload with: Cmd+Shift+P → Developer: Reload Window"
+        fi
+    else
+        log_warning "'code' CLI not found – install manually:"
+        log_info "  code --install-extension ${vsix}"
+    fi
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # FULL PUBLISH ORCHESTRATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -617,6 +699,13 @@ do_publish() {
     version=$(get_version)
 
     log_banner "🚀 Publishing Vibe Code Guardian v${version}"
+
+    # ── Gate: tests must pass before publish ─────────────────────────────
+    log_step "Pre-publish gate: running all tests"
+    do_test || {
+        log_error "Tests failed – publish aborted. Fix issues before releasing."
+        return 1
+    }
 
     # ── Zed publish ───────────────────────────────────────────────────────
     if [ "$SKIP_ZED" = "false" ]; then
@@ -662,9 +751,11 @@ show_usage() {
 
   Modes:
     build       Compile TypeScript, type-check, lint, bundle
+    test        Run unit tests + integration tests
+    local-test  test + build + install .vsix into VS Code for manual verification
     package     build + create .vsix package
-    publish     build + package + publish VS Code + Zed + git tag
-    full        Version bump + publish (complete release)
+    publish     test + build + package + publish VS Code + Zed + git tag
+    full        Version bump + test + publish (complete release)
 
   Version bump (for 'full' mode):
     patch       0.6.0 → 0.6.1
@@ -682,6 +773,9 @@ show_usage() {
 
   Examples:
     ./scripts/build.sh build
+    ./scripts/build.sh test
+    ./scripts/build.sh local-test
+    ./scripts/build.sh local-test --dry-run
     ./scripts/build.sh package
     ./scripts/build.sh publish
     ./scripts/build.sh publish --skip-zed
@@ -709,6 +803,16 @@ case "$MODE" in
         preflight_check build
         check_hard_reset
         do_build
+        ;;
+
+    test)
+        preflight_check build
+        do_test
+        ;;
+
+    local-test)
+        preflight_check package
+        do_local_test
         ;;
 
     package)

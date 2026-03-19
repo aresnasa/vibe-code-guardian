@@ -6,7 +6,8 @@ import * as path from 'path';
 // as well as import your extension to test it
 import * as vscode from 'vscode';
 import { CheckpointManager } from '../checkpointManager';
-import { CheckpointSource, CheckpointType, DEFAULT_SETTINGS, FileChangeType } from '../types';
+import { TimelineTreeProvider } from '../timelineTreeProvider';
+import { CheckpointSource, CheckpointType, DEFAULT_SETTINGS, FileChangeType, MilestoneStatus } from '../types';
 
 class MockWorkspaceState implements vscode.Memento {
 	private readonly store = new Map<string, unknown>();
@@ -116,5 +117,84 @@ suite('Extension Test Suite', () => {
 		assert.strictEqual(checkpoint.changedFiles[0].previousContent, 'previous snapshot');
 
 		await vscode.workspace.fs.delete(fixtureUri, { useTrash: false });
+	});
+
+	test('getMilestones returns empty array initially', async () => {
+		const fakeGitManager = {
+			isGitRepository: async () => true,
+			getDetailedChangedFiles: async () => [],
+			stageAndCommitAll: async () => ({ success: false, changedFiles: [], skippedLargeFiles: [] }),
+			getFileAtCommit: async () => undefined,
+			pushToRemote: async () => ({ success: true, message: 'ok' })
+		};
+		const manager = new CheckpointManager(createMockContext(), fakeGitManager as any);
+		await manager.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false });
+
+		const milestones = manager.getMilestones();
+		assert.strictEqual(milestones.length, 0, 'no milestones should exist initially');
+		assert.strictEqual(manager.getActiveMilestone(), undefined, 'no active milestone should exist initially');
+	});
+
+	test('startMilestone creates a milestone with correct fields', async () => {
+		const fakeGitManager = {
+			isGitRepository: async () => true,
+			getDetailedChangedFiles: async () => [],
+			stageAndCommitAll: async () => ({ success: false, changedFiles: [], skippedLargeFiles: [] }),
+			getFileAtCommit: async () => undefined,
+			pushToRemote: async () => ({ success: true, message: 'ok' })
+		};
+		const manager = new CheckpointManager(createMockContext(), fakeGitManager as any);
+		await manager.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false });
+
+		const milestone = await manager.startMilestone('Add auth', 'Users need to log in', {
+			description: 'JWT-based'
+		});
+
+		assert.strictEqual(milestone.name, 'Add auth');
+		assert.strictEqual(milestone.intent, 'Users need to log in');
+		assert.strictEqual(milestone.description, 'JWT-based');
+		assert.strictEqual(milestone.status, MilestoneStatus.Active);
+		assert.strictEqual(milestone.checkpointIds.length, 0);
+
+		const found = manager.getMilestone(milestone.id);
+		assert.ok(found, 'getMilestone should find the milestone by id');
+		assert.strictEqual(found?.name, 'Add auth');
+
+		const active = manager.getActiveMilestone();
+		assert.ok(active, 'getActiveMilestone should return the new milestone');
+		assert.strictEqual(active?.id, milestone.id);
+
+		const all = manager.getMilestones();
+		assert.strictEqual(all.length, 1);
+
+		const activeOnly = manager.getMilestones(MilestoneStatus.Active);
+		assert.strictEqual(activeOnly.length, 1);
+
+		const completedOnly = manager.getMilestones(MilestoneStatus.Completed);
+		assert.strictEqual(completedOnly.length, 0);
+	});
+
+	test('TimelineTreeProvider placeholder item has startMilestone command when no milestones', async () => {
+		const fakeGitManager = {
+			isGitRepository: async () => true,
+			getDetailedChangedFiles: async () => [],
+			stageAndCommitAll: async () => ({ success: false, changedFiles: [], skippedLargeFiles: [] }),
+			getFileAtCommit: async () => undefined,
+			pushToRemote: async () => ({ success: true, message: 'ok' })
+		};
+		const manager = new CheckpointManager(createMockContext(), fakeGitManager as any);
+		await manager.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false });
+
+		const provider = new TimelineTreeProvider(manager);
+		const rootItems = await provider.getChildren(undefined);
+
+		assert.strictEqual(rootItems.length, 1, 'should show exactly one placeholder item');
+		const placeholder = rootItems[0];
+		assert.ok(placeholder.command, 'placeholder must have a command');
+		assert.strictEqual(
+			placeholder.command?.command,
+			'vibeCodeGuardian.startMilestone',
+			'placeholder command must be startMilestone'
+		);
 	});
 });

@@ -136,11 +136,17 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
 
         // Add "No checkpoints" message if empty
         if (items.length === 0) {
-            items.push(new TimelineItem(
+            const placeholder = new TimelineItem(
                 '📭 No milestones yet',
-                'Use "Start Milestone" to describe your intent',
+                'Click to start a milestone',
                 vscode.TreeItemCollapsibleState.None
-            ));
+            );
+            placeholder.command = {
+                command: 'vibeCodeGuardian.startMilestone',
+                title: 'Start Milestone'
+            };
+            placeholder.iconPath = new vscode.ThemeIcon('add');
+            items.push(placeholder);
         }
 
         return items;
