@@ -1,6 +1,7 @@
 /**
  * Vibe Code Guardian - State Monitor
- * Periodically monitors file changes and creates Git commits for tracking
+ * Periodically monitors file changes and creates Git commits for tracking.
+ * Uses significance-based filtering to avoid noisy auto-commits.
  */
 
 import * as vscode from 'vscode';
@@ -14,6 +15,16 @@ export interface StateSnapshot {
     filesChanged: string[];
 }
 
+/** Structural / keyword patterns that indicate a meaningful code change */
+const SIGNIFICANT_FILE_PATTERNS: RegExp[] = [
+    /\.(ts|js|tsx|jsx|py|rs|go|java|kt|swift|c|cpp|h|rb|php)$/,
+];
+const CONFIG_FILE_NAMES = [
+    'package.json', 'tsconfig.json', 'Cargo.toml', 'go.mod',
+    'Dockerfile', 'Makefile', '.env', 'docker-compose',
+    'pyproject.toml', 'setup.py', 'extension.toml',
+];
+
 export class StateMonitor {
     private gitManager: GitManager;
     private commitTimeout: NodeJS.Timeout | null = null;
@@ -23,10 +34,13 @@ export class StateMonitor {
     private isEnabled: boolean = true;
     private stateHistory: StateSnapshot[] = [];
     
-    // Configuration
-    private minTimeBetweenCommits: number = 10000; // 10 seconds minimum between auto-commits
-    private commitDebounceMs: number = 5000; // 5 seconds debounce for file changes
+    // Configuration — longer defaults to reduce noise
+    private minTimeBetweenCommits: number = 60_000; // 60 seconds between auto-commits
+    private commitDebounceMs: number = 30_000;      // 30 seconds debounce
     private autoCommitEnabled: boolean = true;
+
+    // Dynamic interval scaling
+    private consecutiveTrivialBatches = 0; // counts batches skipped as trivial
 
     private _onStateChanged = new vscode.EventEmitter<StateSnapshot>();
     public readonly onStateChanged = this._onStateChanged.event;
@@ -188,6 +202,26 @@ export class StateMonitor {
     }
 
     /**
+     * Effective minimum gap — grows when trivial batches are repeatedly skipped.
+     */
+    private get effectiveMinGap(): number {
+        const multiplier = Math.min(Math.pow(2, this.consecutiveTrivialBatches), 4);
+        return this.minTimeBetweenCommits * multiplier;
+    }
+
+    /**
+     * Evaluate whether the current set of changed files is significant enough to commit.
+     * Returns true when at least one file is a code/config file.
+     */
+    private isSignificantBatch(files: string[]): boolean {
+        return files.some(f => {
+            const name = f.split('/').pop() || '';
+            if (CONFIG_FILE_NAMES.some(cf => name.includes(cf))) { return true; }
+            return SIGNIFICANT_FILE_PATTERNS.some(pat => pat.test(name));
+        });
+    }
+
+    /**
      * Check for changes and commit if needed
      */
     private async checkAndCommit(): Promise<void> {
@@ -195,9 +229,9 @@ export class StateMonitor {
             return;
         }
 
-        // Check minimum time between commits
+        // Check minimum time between commits (dynamic)
         const now = Date.now();
-        if (now - this.lastCommitTime < this.minTimeBetweenCommits) {
+        if (now - this.lastCommitTime < this.effectiveMinGap) {
             return;
         }
 
@@ -243,6 +277,16 @@ export class StateMonitor {
                 this.pendingChanges.clear();
                 return;
             }
+
+            // --- Significance gate ---
+            if (!this.isSignificantBatch(trackedFiles)) {
+                this.consecutiveTrivialBatches++;
+                console.log(`🔇 State Monitor: trivial batch (${trackedFiles.length} files), skipping commit (gap now ${this.effectiveMinGap}ms)`);
+                this.pendingChanges.clear();
+                return;
+            }
+            // Reset scaling on significant commit
+            this.consecutiveTrivialBatches = 0;
 
             const fileList = trackedFiles.slice(0, 3).join(', ');
             const moreFiles = trackedFiles.length > 3 ? ` +${trackedFiles.length - 3} more` : '';

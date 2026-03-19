@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import { GitManager } from './gitManager';
 import { CheckpointManager } from './checkpointManager';
-import { AIDetector } from './aiDetector';
+import { AIDetector, ChangeSignificanceAnalyzer } from './aiDetector';
 import { RollbackManager, DiffContentProvider } from './rollbackManager';
 import { TimelineTreeProvider, TimelineItem } from './timelineTreeProvider';
 import { StateMonitor } from './stateMonitor';
@@ -22,11 +22,11 @@ import { GitGraphWebviewManager } from './gitGraphWebview';
 class SmartNotificationManager {
     private lastNotificationTime = 0;
     private lastNotificationMessage = '';
-    private notificationHistory: string[] = [];
-    private throttleTime = 5000; // Default 5 seconds
+    private notificationHistory: { message: string; time: number }[] = [];
+    private throttleTime = 30000; // Default 30 seconds (raised from 15)
+    private consecutiveThrottles = 0; // Exponential back-off counter
 
     constructor() {
-        // Load settings for throttle configuration
         const settings = this.loadSettings();
         if (settings.notificationThrottle) {
             this.throttleTime = settings.notificationThrottle;
@@ -37,128 +37,100 @@ class SmartNotificationManager {
         try {
             const config = vscode.workspace.getConfiguration('vibeCodeGuardian');
             return {
-                notificationThrottle: config.get<number>('notificationThrottle', 5000),
+                notificationThrottle: config.get<number>('notificationThrottle', 30000),
                 maxNotificationWindows: config.get<number>('maxNotificationWindows', 3)
             };
         } catch (error) {
             console.error('Failed to load notification settings:', error);
-            return { notificationThrottle: 5000, maxNotificationWindows: 3 };
+            return { notificationThrottle: 30000, maxNotificationWindows: 3 };
         }
     }
 
     /**
-     * Show information message with smart throttling
-     * @param message Message to display
-     * @param dismissible Whether message can be dismissed
-     * @returns Promise that resolves when message is shown or skipped
+     * Effective throttle interval — grows exponentially when many similar
+     * notifications are suppressed consecutively, resets on a successful show.
      */
+    private get effectiveThrottleMs(): number {
+        // Cap the multiplier at 8× (i.e. 2^3)
+        const multiplier = Math.min(Math.pow(2, this.consecutiveThrottles), 8);
+        return this.throttleTime * multiplier;
+    }
+
     async showInformationMessage(message: string, dismissible: boolean = true): Promise<void> {
         const now = Date.now();
 
-        // Check throttle time
-        if (now - this.lastNotificationTime < this.throttleTime) {
-            console.log(`🔇 Notification throttled: ${message}`);
-            return; // Skip notification due to throttle
-        }
-
-        // Check if similar message was recently shown
-        if (this.isSimilarToRecent(message)) {
-            console.log(`🔇 Similar notification skipped: ${message}`);
-            return; // Skip similar notification
-        }
-
-        // Check max notification windows and dismiss old ones if needed
-        await this.manageNotificationWindows();
-
-        // Show notification
-        await vscode.window.showInformationMessage(message, dismissible ? 'Dismiss' : 'OK');
-
-        // Update tracking
-        this.lastNotificationTime = now;
-        this.lastNotificationMessage = message;
-        this.notificationHistory.push(message);
-
-        // Keep only recent history (last 10 messages)
-        if (this.notificationHistory.length > 10) {
-            this.notificationHistory = this.notificationHistory.slice(-10);
-        }
-    }
-
-    /**
-     * Check if message is similar to recent notifications
-     * @param message Message to check
-     * @returns true if similar to recent message
-     */
-    private isSimilarToRecent(message: string): boolean {
-        const messageLower = message.toLowerCase();
-        return this.notificationHistory.some(historyMessage => {
-            const historyLower = historyMessage.toLowerCase();
-            // Check if they share more than 50% of words
-            const messageWords = messageLower.split(/\s+/);
-            const historyWords = historyLower.split(/\s+/);
-            const commonWords = messageWords.filter(word => historyWords.includes(word));
-            const similarity = commonWords.length / Math.max(messageWords.length, 1);
-            return similarity > 0.5;
-        });
-    }
-
-    /**
-     * Manage notification windows - dismiss old ones if we have too many
-     */
-    private async manageNotificationWindows(): Promise<void> {
-        const settings = this.loadSettings();
-        const maxWindows = settings.maxNotificationWindows || 3;
-
-        // Try to find and dismiss old notification windows
-        // VS Code doesn't expose a direct API to manage all notifications,
-        // so we use a workaround with showInformationMessage
-        if (maxWindows > 0) {
-            // We can't directly manage windows, but we can try to show a dismiss-all message
-            // This is a limitation of VS Code's API
-            const recentCount = this.notificationHistory.slice(-maxWindows).length;
-            if (recentCount >= maxWindows) {
-                console.log(`🔇 Too many notifications (${recentCount}), trying to dismiss some...`);
-            }
-        }
-    }
-
-    /**
-     * Show warning message (less strict throttling)
-     * @param message Message to display
-     */
-    async showWarningMessage(message: string): Promise<void> {
-        const now = Date.now();
-
-        // Warnings have shorter throttle (2 seconds)
-        if (now - this.lastNotificationTime < 2000) {
-            console.log(`🔇 Warning throttled: ${message}`);
+        // Hard throttle — time since last shown notification
+        if (now - this.lastNotificationTime < this.effectiveThrottleMs) {
+            this.consecutiveThrottles++;
+            console.log(`🔇 Notification throttled (${this.effectiveThrottleMs}ms): ${message}`);
             return;
         }
 
-        await vscode.window.showWarningMessage(message);
+        // De-duplicate — skip if a very similar message was shown within a 60-second window
+        if (this.isSimilarToRecent(message, now)) {
+            this.consecutiveThrottles++;
+            console.log(`🔇 Similar notification skipped: ${message}`);
+            return;
+        }
 
-        // Update tracking with shorter throttle for warnings
+        // Enforce max visible windows based on recent history
+        const settings = this.loadSettings();
+        const recentWindow = 30_000; // 30 seconds
+        const recentCount = this.notificationHistory.filter(h => now - h.time < recentWindow).length;
+        if (recentCount >= (settings.maxNotificationWindows || 3)) {
+            this.consecutiveThrottles++;
+            console.log(`🔇 Too many recent notifications (${recentCount}), skipping: ${message}`);
+            return;
+        }
+
+        await vscode.window.showInformationMessage(message, dismissible ? 'Dismiss' : 'OK');
+
+        // Reset exponential back-off on successful show
+        this.consecutiveThrottles = 0;
+        this.lastNotificationTime = now;
+        this.lastNotificationMessage = message;
+        this.notificationHistory.push({ message, time: now });
+
+        // Prune entries older than 2 minutes
+        this.notificationHistory = this.notificationHistory.filter(h => now - h.time < 120_000);
+    }
+
+    /**
+     * Check if message is similar to any shown within the past `windowMs` milliseconds.
+     */
+    private isSimilarToRecent(message: string, now: number, windowMs: number = 60_000): boolean {
+        const messageLower = message.toLowerCase();
+        const messageWords = new Set(messageLower.split(/\s+/));
+        return this.notificationHistory.some(entry => {
+            if (now - entry.time > windowMs) { return false; }
+            const historyWords = entry.message.toLowerCase().split(/\s+/);
+            const commonCount = historyWords.filter(w => messageWords.has(w)).length;
+            return commonCount / Math.max(messageWords.size, 1) > 0.4;
+        });
+    }
+
+    async showWarningMessage(message: string): Promise<void> {
+        const now = Date.now();
+        if (now - this.lastNotificationTime < 5000) {
+            console.log(`🔇 Warning throttled: ${message}`);
+            return;
+        }
+        await vscode.window.showWarningMessage(message);
         this.lastNotificationTime = now;
         this.lastNotificationMessage = message;
     }
 
-    /**
-     * Show error message (no throttling - errors should always show)
-     * @param message Message to display
-     */
     async showErrorMessage(message: string): Promise<void> {
         await vscode.window.showErrorMessage(message);
-        // Don't throttle error messages
         this.lastNotificationTime = Date.now();
     }
 
-    /**
-     * Reset throttling (call when user explicitly triggers an action)
-     */
+    /** Reset throttling (call when user explicitly triggers an action) */
     reset(): void {
         this.lastNotificationTime = 0;
         this.lastNotificationMessage = '';
         this.notificationHistory = [];
+        this.consecutiveThrottles = 0;
         console.log('🔄 Notification throttling reset');
     }
 }
@@ -207,6 +179,7 @@ let languageStatusBarItem: vscode.StatusBarItem;
 let notificationStatusBarItem: vscode.StatusBarItem;
 let pushStrategyStatusBarItem: vscode.StatusBarItem;
 let trackingModeStatusBarItem: vscode.StatusBarItem;
+let milestoneToggleStatusBarItem: vscode.StatusBarItem;
 let milestoneStatusBarItem: vscode.StatusBarItem;
 
 async function syncSettingsFromConfiguration(): Promise<void> {
@@ -227,7 +200,8 @@ async function syncSettingsFromConfiguration(): Promise<void> {
         commitLanguage: config.get<CommitLanguage>('commitLanguage', 'auto'),
         pushStrategy: config.get<PushStrategy>('pushStrategy', 'none'),
         maxFileSize: config.get<number>('maxFileSizeKB', 512) * 1024,
-        trackingMode: config.get<TrackingMode>('trackingMode', 'local-only')
+        trackingMode: config.get<TrackingMode>('trackingMode', 'local-only'),
+        milestoneEnabled: config.get<boolean>('milestoneEnabled', true)
     });
 }
 
@@ -238,7 +212,26 @@ function applyRuntimeSettings(context: vscode.ExtensionContext): void {
     updateNotificationStatusBar(settings.notificationLevel);
     updatePushStrategyStatusBar(settings.pushStrategy);
     updateTrackingModeStatusBar(settings.trackingMode);
+    updateMilestoneToggleStatusBar(settings.milestoneEnabled);
     startAutoSaveTimer(context);
+}
+
+function isMilestoneEnabled(): boolean {
+    return checkpointManager.getSettings().milestoneEnabled;
+}
+
+async function showMilestoneDisabledGuidance(): Promise<void> {
+    const action = await vscode.window.showInformationMessage(
+        'Milestone is currently OFF. Use the status bar button "🎯 OFF" or run "Vibe Guardian: Toggle Milestone" to enable it.',
+        'Enable Now',
+        'Open Settings'
+    );
+
+    if (action === 'Enable Now') {
+        await vscode.commands.executeCommand('vibeCodeGuardian.toggleMilestone');
+    } else if (action === 'Open Settings') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'vibeCodeGuardian.milestoneEnabled');
+    }
 }
 
 /**
@@ -363,6 +356,7 @@ export async function activate(context: vscode.ExtensionContext) {
         createNotificationStatusBar(context);
         createPushStrategyStatusBar(context);
         createTrackingModeStatusBar(context);
+        createMilestoneToggleStatusBar(context);
         createMilestoneStatusBar(context);
 
         // Show welcome and auto-start session
@@ -1337,6 +1331,27 @@ function registerCommands(context: vscode.ExtensionContext) {
         })
     );
 
+    // Toggle Milestone Enable/Disable
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.toggleMilestone', async () => {
+            const settings = checkpointManager.getSettings();
+            const nextEnabled = !settings.milestoneEnabled;
+            await checkpointManager.updateSettings({ milestoneEnabled: nextEnabled });
+            updateMilestoneToggleStatusBar(nextEnabled);
+
+            if (!nextEnabled) {
+                vscode.window.showInformationMessage(
+                    '🎯 Milestone OFF. To enable again, click status bar "🎯 OFF" or run "Vibe Guardian: Toggle Milestone".'
+                );
+                return;
+            }
+
+            vscode.window.showInformationMessage(
+                '🎯 Milestone ON. Start with "Vibe Guardian: Start Milestone" (Cmd+Alt+M). Use the same status bar button to turn it off.'
+            );
+        })
+    );
+
     // ============================================
     // Git Graph Commands
     // ============================================
@@ -1348,6 +1363,11 @@ function registerCommands(context: vscode.ExtensionContext) {
     // Start Milestone
     context.subscriptions.push(
         vscode.commands.registerCommand('vibeCodeGuardian.startMilestone', async () => {
+            if (!isMilestoneEnabled()) {
+                await showMilestoneDisabledGuidance();
+                return;
+            }
+
             const name = await vscode.window.showInputBox({
                 prompt: '🎯 Milestone name (WHAT you are doing)',
                 placeHolder: 'e.g., Add user authentication'
@@ -1487,6 +1507,11 @@ function registerCommands(context: vscode.ExtensionContext) {
     // Show Milestones
     context.subscriptions.push(
         vscode.commands.registerCommand('vibeCodeGuardian.showMilestones', async () => {
+            if (!isMilestoneEnabled()) {
+                await showMilestoneDisabledGuidance();
+                return;
+            }
+
             const milestones = checkpointManager.getMilestones();
             if (milestones.length === 0) {
                 const action = await vscode.window.showInformationMessage(
@@ -1824,26 +1849,20 @@ function setupEventListeners(context: vscode.ExtensionContext) {
     aiDetector.onFileChanged(async (event) => {
         console.log(`📁 File change detected: ${event.changedFiles.length} files, source: ${event.source}, isNew: ${event.isNewFile}`);
         
-        // Log details for debugging
-        for (const file of event.changedFiles) {
-            console.log(`  - ${file.changeType}: ${file.path}`);
-        }
-        
         const settings = checkpointManager.getSettings();
         
         // Handle user edits - create checkpoint if enabled
         if (event.source === CheckpointSource.User && settings.autoCheckpointOnUserSave) {
-            // Calculate total lines changed
-            const totalLinesChanged = event.changedFiles.reduce((sum, file) => {
-                return sum + (file.linesAdded || 0) + (file.linesRemoved || 0);
-            }, 0);
-            
-            // Only create checkpoint if significant changes or new file
-            if (event.isNewFile || totalLinesChanged >= settings.minLinesForUserCheckpoint) {
+            // Use ChangeSignificanceAnalyzer for smart evaluation
+            const significance = ChangeSignificanceAnalyzer.analyze(event.changedFiles);
+
+            // Require significance score >= 20 (meaningful code change)
+            // New files always pass (score 30+ from the analyzer)
+            if (event.isNewFile || significance.score >= 20) {
                 const fileNames = event.changedFiles.map(f => f.path.split('/').pop()).join(', ');
                 const description = event.isNewFile 
                     ? `New file: ${fileNames}`
-                    : `User edit: ${fileNames} (+${totalLinesChanged} lines)`;
+                    : `User edit: ${fileNames} (sig=${significance.score}: ${significance.reasons.slice(0, 2).join(', ')})`;
                 
                 const checkpoint = await checkpointManager.createCheckpoint(
                     event.isNewFile ? CheckpointType.Auto : CheckpointType.Manual,
@@ -1856,6 +1875,8 @@ function setupEventListeners(context: vscode.ExtensionContext) {
                     await notificationManager.showInformationMessage(`💾 User checkpoint: ${checkpoint.name}`);
                 }
                 treeProvider.refresh();
+            } else {
+                console.log(`🔇 Skipped user checkpoint: significance=${significance.score} (threshold=20)`);
             }
         }
         
@@ -2017,6 +2038,27 @@ function updateTrackingModeStatusBar(mode: TrackingMode) {
     if (trackingModeStatusBarItem) {
         trackingModeStatusBarItem.text = getTrackingModeDisplayName(mode);
     }
+}
+
+function createMilestoneToggleStatusBar(context: vscode.ExtensionContext) {
+    milestoneToggleStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 101);
+    milestoneToggleStatusBarItem.command = 'vibeCodeGuardian.toggleMilestone';
+    milestoneToggleStatusBarItem.tooltip = 'Click to toggle milestone feature ON/OFF';
+
+    const settings = checkpointManager.getSettings();
+    updateMilestoneToggleStatusBar(settings.milestoneEnabled);
+
+    milestoneToggleStatusBarItem.show();
+    context.subscriptions.push(milestoneToggleStatusBarItem);
+}
+
+function updateMilestoneToggleStatusBar(enabled: boolean) {
+    if (!milestoneToggleStatusBarItem) { return; }
+
+    milestoneToggleStatusBarItem.text = enabled ? '$(target) ON' : '$(target) OFF';
+    milestoneToggleStatusBarItem.backgroundColor = enabled
+        ? undefined
+        : new vscode.ThemeColor('statusBarItem.warningBackground');
 }
 
 /**

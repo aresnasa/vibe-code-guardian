@@ -251,17 +251,8 @@ export class CheckpointManager {
             await this.handlePushStrategy(checkpoint);
         }
 
-        // Show notification if enabled
-        if (this.storageData.settings.showNotifications) {
-            vscode.window.showInformationMessage(
-                `💾 Checkpoint saved: ${name}`,
-                'View Timeline'
-            ).then(selection => {
-                if (selection === 'View Timeline') {
-                    vscode.commands.executeCommand('vibeCodeGuardian.showTimeline');
-                }
-            });
-        }
+        // Notification is handled by the extension layer via SmartNotificationManager.
+        // Do NOT call vscode.window.showInformationMessage here to avoid double-firing.
 
         return checkpoint;
     }

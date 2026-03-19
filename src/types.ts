@@ -219,6 +219,8 @@ export interface GuardianSettings {
     maxNotificationWindows: number;
     /** Tracking mode: 'full' = git commits for every checkpoint, 'local-only' = file snapshots only, no git commits from plugin */
     trackingMode: TrackingMode;
+    /** Enable milestone workflow (intent-based grouping) */
+    milestoneEnabled: boolean;
 }
 
 export interface RollbackResult {
@@ -338,7 +340,7 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
     createSessionBranch: false,
     showNotifications: true,
     notificationLevel: 'milestone', // Only show for manual/milestone checkpoints by default
-    notificationThrottle: 5000, // 5 seconds between similar notifications
+    notificationThrottle: 15000, // 15 seconds between similar notifications
     maxNotificationWindows: 3, // Maximum notification windows to show
     namingPattern: '{type}-{timestamp}',
     ignorePatterns: [
@@ -364,5 +366,6 @@ export const DEFAULT_SETTINGS: GuardianSettings = {
     maxFileSize: 512 * 1024, // 512KB
     commitLanguage: 'auto',
     pushStrategy: 'none', // Never push plugin-generated history by default
-    trackingMode: 'local-only' // Keep plugin history local by default
+    trackingMode: 'local-only', // Keep plugin history local by default
+    milestoneEnabled: true
 };

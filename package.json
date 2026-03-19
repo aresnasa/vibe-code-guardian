@@ -2,7 +2,7 @@
   "name": "vibe-code-guardian",
   "displayName": "Vibe Code Guardian",
   "description": "Game-like checkpoint system for AI-assisted coding - save, load, and rollback your vibe coding sessions",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "publisher": "vibe-coder",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -243,6 +243,12 @@
         "command": "vibeCodeGuardian.toggleTrackingMode",
         "title": "Toggle Tracking Mode (Full/Local Backup)",
         "icon": "$(archive)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.toggleMilestone",
+        "title": "Toggle Milestone (On/Off)",
+        "icon": "$(target)",
         "category": "Vibe Guardian"
       },
       {
@@ -504,10 +510,10 @@
         },
         "vibeCodeGuardian.notificationThrottle": {
           "type": "number",
-          "default": 5000,
+          "default": 15000,
           "minimum": 1000,
           "maximum": 60000,
-          "description": "Minimum time between similar notifications in milliseconds (default: 5000ms = 5 seconds). Helps prevent notification spam during rapid changes."
+          "description": "Minimum time between similar notifications in milliseconds (default: 15000ms = 15 seconds). Helps prevent notification spam during rapid changes."
         },
         "vibeCodeGuardian.maxNotificationWindows": {
           "type": "number",
@@ -565,6 +571,11 @@
             "Local Backup - plugin stores snapshots locally and never creates plugin Git commits (recommended for shared repositories)"
           ],
           "description": "Controls whether Vibe Code Guardian writes Git commits. Use 'local-only' to keep user Git history clean while preserving local rollback checkpoints."
+        },
+        "vibeCodeGuardian.milestoneEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable milestone workflow (intent-based grouping). When disabled, Start Milestone is blocked until re-enabled."
         }
       }
     }

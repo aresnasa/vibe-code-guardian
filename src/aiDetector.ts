@@ -1,10 +1,120 @@
 /**
  * Vibe Code Guardian - AI Edit Detector
  * Detect changes from AI assistants (Copilot, Claude, Cline, etc.)
+ * Uses semantic significance scoring to avoid noisy tracking.
  */
 
 import * as vscode from 'vscode';
 import { CheckpointSource, ChangedFile, FileChangeType } from './types';
+
+// ------------------------------------------------------------------
+// Change Significance Analyzer
+// Scores code changes by semantic importance instead of raw line count.
+// ------------------------------------------------------------------
+
+export interface SignificanceResult {
+    score: number;           // 0–100 composite score
+    reasons: string[];       // human-readable explanations
+    isStructural: boolean;   // new function/class/interface/export
+    isConfigChange: boolean; // package.json, tsconfig, etc.
+}
+
+export class ChangeSignificanceAnalyzer {
+    /** Structural keywords per language family */
+    private static readonly STRUCTURAL_PATTERNS: RegExp[] = [
+        // JS / TS
+        /^[\s]*(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|enum|const|let|var)\s+\w+/m,
+        // Python
+        /^[\s]*(?:def|class|async\s+def)\s+\w+/m,
+        // Rust
+        /^[\s]*(?:pub\s+)?(?:fn|struct|enum|trait|impl|mod|type)\s+\w+/m,
+        // Go
+        /^[\s]*(?:func|type|var|const)\s+\w+/m,
+    ];
+
+    /** Config / manifest files that are always significant */
+    private static readonly CONFIG_FILES = [
+        'package.json', 'tsconfig.json', 'Cargo.toml', 'go.mod', 'go.sum',
+        'pyproject.toml', 'setup.py', 'Makefile', 'Dockerfile',
+        '.env', '.eslintrc', 'eslint.config', 'jest.config',
+        'extension.toml', 'webpack.config', 'vite.config',
+    ];
+
+    /** API surface keywords that indicate semantically important changes */
+    private static readonly API_KEYWORDS = /\b(export|public|module\.exports|router\.|app\.|api\.|endpoint|handler|middleware|hook|provider|context|dispatch|emit|subscribe)\b/;
+
+    /**
+     * Compute a diff between previousContent and currentContent and return
+     * only the *added* lines (lines present in current but not in previous).
+     */
+    private static addedLines(prev: string, cur: string): string[] {
+        const prevSet = new Set(prev.split('\n').map(l => l.trim()));
+        return cur.split('\n').filter(l => !prevSet.has(l.trim()) && l.trim().length > 0);
+    }
+
+    public static analyze(changedFiles: ChangedFile[]): SignificanceResult {
+        let score = 0;
+        const reasons: string[] = [];
+        let isStructural = false;
+        let isConfigChange = false;
+
+        for (const file of changedFiles) {
+            const fileName = file.path.split('/').pop() || '';
+
+            // --- Config file bonus ---
+            if (this.CONFIG_FILES.some(cf => fileName.includes(cf))) {
+                score += 25;
+                isConfigChange = true;
+                reasons.push(`config: ${fileName}`);
+            }
+
+            // --- Deleted / renamed files are always significant ---
+            if (file.changeType === FileChangeType.Deleted || file.changeType === FileChangeType.Renamed) {
+                score += 20;
+                reasons.push(`${file.changeType}: ${fileName}`);
+                continue;
+            }
+
+            // --- New file ---
+            if (file.changeType === FileChangeType.Added) {
+                score += 30;
+                isStructural = true;
+                reasons.push(`new file: ${fileName}`);
+                continue;
+            }
+
+            // --- Analyze actual content diff ---
+            const prev = file.previousContent ?? '';
+            const cur = file.currentContent ?? '';
+            const added = this.addedLines(prev, cur);
+
+            if (added.length === 0) { continue; }
+
+            // Structural keyword detection on added lines
+            const addedBlock = added.join('\n');
+            for (const pat of this.STRUCTURAL_PATTERNS) {
+                if (pat.test(addedBlock)) {
+                    score += 15;
+                    isStructural = true;
+                    reasons.push(`structural change in ${fileName}`);
+                    break; // count once per file
+                }
+            }
+
+            // API surface change
+            if (this.API_KEYWORDS.test(addedBlock)) {
+                score += 10;
+                reasons.push(`API surface change in ${fileName}`);
+            }
+
+            // Scaled line-count contribution (diminishing returns)
+            const lineScore = Math.min(20, Math.floor(Math.sqrt(added.length) * 3));
+            score += lineScore;
+        }
+
+        return { score: Math.min(100, score), reasons, isStructural, isConfigChange };
+    }
+}
 
 interface PendingChange {
     document: vscode.TextDocument;
@@ -17,7 +127,12 @@ export class AIDetector {
     private disposables: vscode.Disposable[] = [];
     private pendingChanges: Map<string, PendingChange> = new Map();
     private debounceTimer: NodeJS.Timeout | null = null;
-    private readonly debounceDelay = 2000; // 2 seconds
+    private readonly debounceDelay = 8000; // 8 seconds — longer batch window to reduce noise
+
+    // Dynamic cooldown: after firing an event, impose an adaptive cooldown
+    private lastEventTime = 0;
+    private readonly baseCooldownMs = 30_000;   // 30 s minimum between events
+    private consecutiveSkips = 0;                // exponential back-off counter
     
     private _onAIEditDetected: vscode.EventEmitter<{
         source: CheckpointSource;
@@ -215,8 +330,8 @@ export class AIDetector {
             0
         );
         
-        // Large insertions might be from AI
-        if (totalChangedChars > 100) {
+        // Large insertions might be from AI (raise threshold to avoid false positives)
+        if (totalChangedChars > 200) {
             // Check which AI extensions are active
             for (const [extensionId, source] of Object.entries(this.AI_EXTENSIONS)) {
                 const extension = vscode.extensions.getExtension(extensionId);
@@ -261,10 +376,28 @@ export class AIDetector {
     }
 
     /**
-     * Process pending changes and emit event if needed
+     * Effective cooldown — grows when events are skipped consecutively.
+     */
+    private get effectiveCooldownMs(): number {
+        const multiplier = Math.min(Math.pow(2, this.consecutiveSkips), 8);
+        return this.baseCooldownMs * multiplier;
+    }
+
+    /**
+     * Process pending changes and emit event if needed.
+     * Uses ChangeSignificanceAnalyzer to decide whether the batch is worth tracking.
      */
     private processPendingChanges(): void {
         if (this.pendingChanges.size === 0) {
+            return;
+        }
+
+        // --- Cooldown gate ---
+        const now = Date.now();
+        if (now - this.lastEventTime < this.effectiveCooldownMs) {
+            this.consecutiveSkips++;
+            console.log(`🔇 AIDetector: cooldown active (${this.effectiveCooldownMs}ms), skipping batch`);
+            this.pendingChanges.clear();
             return;
         }
 
@@ -275,13 +408,16 @@ export class AIDetector {
             const previousContent = this.fileSnapshots.get(uri) || '';
             const currentContent = pending.document.getText();
             
-            // Calculate diff
-            const linesAdded = this.countLines(currentContent) - this.countLines(previousContent);
+            const prevLineCount = this.countLines(previousContent);
+            const curLineCount = this.countLines(currentContent);
+            const linesAdded = Math.max(0, curLineCount - prevLineCount);
+            const linesRemoved = Math.max(0, prevLineCount - curLineCount);
+
             const changedFile: ChangedFile = {
                 path: pending.document.uri.fsPath,
                 changeType: FileChangeType.Modified,
-                linesAdded: Math.max(0, linesAdded),
-                linesRemoved: Math.max(0, -linesAdded),
+                linesAdded,
+                linesRemoved,
                 previousContent,
                 currentContent
             };
@@ -296,18 +432,32 @@ export class AIDetector {
             this.fileSnapshots.set(uri, currentContent);
         }
 
+        // --- Significance gate ---
+        const allFiles = Array.from(changesBySource.values()).flat();
+        const significance = ChangeSignificanceAnalyzer.analyze(allFiles);
+
+        // Threshold: score >= 15 means the change is worth tracking
+        if (significance.score < 15) {
+            this.consecutiveSkips++;
+            console.log(`🔇 AIDetector: low significance (${significance.score}), skipping`);
+            this.pendingChanges.clear();
+            return;
+        }
+
+        console.log(`📊 AIDetector: significance=${significance.score} [${significance.reasons.join('; ')}]`);
+
         // Emit events for all changes
         for (const [source, changedFiles] of changesBySource) {
-            // Always emit file changed event for any change
             this._onFileChanged.fire({ source, changedFiles });
             
-            // Also emit AI-specific event for AI changes
             if (source !== CheckpointSource.User) {
                 this._onAIEditDetected.fire({ source, changedFiles });
             }
         }
 
-        // Clear pending changes
+        // Reset cooldown state on successful emission
+        this.lastEventTime = now;
+        this.consecutiveSkips = 0;
         this.pendingChanges.clear();
     }
 
