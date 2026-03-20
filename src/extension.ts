@@ -175,12 +175,8 @@ let treeProvider: TimelineTreeProvider;
 let stateMonitor: StateMonitor;
 let gitGraphTreeProvider: GitGraphTreeProvider;
 let gitGraphWebview: GitGraphWebviewManager;
-let languageStatusBarItem: vscode.StatusBarItem;
-let notificationStatusBarItem: vscode.StatusBarItem;
-let pushStrategyStatusBarItem: vscode.StatusBarItem;
-let trackingModeStatusBarItem: vscode.StatusBarItem;
-let milestoneToggleStatusBarItem: vscode.StatusBarItem;
-let milestoneStatusBarItem: vscode.StatusBarItem;
+let guardianMainStatusBarItem: vscode.StatusBarItem;
+let guardianInfoStatusBarItem: vscode.StatusBarItem;
 
 async function syncSettingsFromConfiguration(): Promise<void> {
     const config = vscode.workspace.getConfiguration('vibeCodeGuardian');
@@ -208,11 +204,7 @@ async function syncSettingsFromConfiguration(): Promise<void> {
 function applyRuntimeSettings(context: vscode.ExtensionContext): void {
     const settings = checkpointManager.getSettings();
     stateMonitor.setAutoCommit(settings.trackingMode === 'full');
-    updateLanguageStatusBar(settings.commitLanguage);
-    updateNotificationStatusBar(settings.notificationLevel);
-    updatePushStrategyStatusBar(settings.pushStrategy);
-    updateTrackingModeStatusBar(settings.trackingMode);
-    updateMilestoneToggleStatusBar(settings.milestoneEnabled);
+    updateGuardianInfoStatusBar();
     startAutoSaveTimer(context);
 }
 
@@ -352,12 +344,7 @@ export async function activate(context: vscode.ExtensionContext) {
         startAutoSaveTimer(context);
 
         // Create status bar items
-        createLanguageStatusBar(context);
-        createNotificationStatusBar(context);
-        createPushStrategyStatusBar(context);
-        createTrackingModeStatusBar(context);
-        createMilestoneToggleStatusBar(context);
-        createMilestoneStatusBar(context);
+        createGuardianStatusBars(context);
 
         // Show welcome and auto-start session
         vscode.window.showInformationMessage('🎮 Vibe Code Guardian activated!');
@@ -1271,15 +1258,18 @@ function registerCommands(context: vscode.ExtensionContext) {
     );
 
     // Toggle Commit Language
+
+    // Open Guardian Panel (replaces individual status bar buttons)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.openGuardianPanel', () => {
+            showGuardianPanel();
+        })
+    );
     context.subscriptions.push(
         vscode.commands.registerCommand('vibeCodeGuardian.toggleCommitLanguage', async () => {
             const settings = checkpointManager.getSettings();
             const nextLanguage = getNextLanguage(settings.commitLanguage);
             await checkpointManager.updateSettings({ commitLanguage: nextLanguage });
-            
-            // Update status bar
-            updateLanguageStatusBar(nextLanguage);
-            
             const displayName = getLanguageDisplayName(nextLanguage);
             vscode.window.showInformationMessage(`🌐 Commit language changed to: ${displayName}`);
         })
@@ -1291,10 +1281,6 @@ function registerCommands(context: vscode.ExtensionContext) {
             const settings = checkpointManager.getSettings();
             const nextLevel = getNextNotificationLevel(settings.notificationLevel);
             await checkpointManager.updateSettings({ notificationLevel: nextLevel });
-            
-            // Update status bar
-            updateNotificationStatusBar(nextLevel);
-            
             const displayName = getNotificationLevelDisplayName(nextLevel);
             vscode.window.showInformationMessage(`🔔 Notification level changed to: ${displayName}`);
         })
@@ -1306,10 +1292,6 @@ function registerCommands(context: vscode.ExtensionContext) {
             const settings = checkpointManager.getSettings();
             const nextStrategy = getNextPushStrategy(settings.pushStrategy);
             await checkpointManager.updateSettings({ pushStrategy: nextStrategy });
-            
-            // Update status bar
-            updatePushStrategyStatusBar(nextStrategy);
-            
             const displayName = getPushStrategyDisplayName(nextStrategy);
             vscode.window.showInformationMessage(`📤 Push strategy changed to: ${displayName}`);
         })
@@ -1337,7 +1319,7 @@ function registerCommands(context: vscode.ExtensionContext) {
             const settings = checkpointManager.getSettings();
             const nextEnabled = !settings.milestoneEnabled;
             await checkpointManager.updateSettings({ milestoneEnabled: nextEnabled });
-            updateMilestoneToggleStatusBar(nextEnabled);
+            updateGuardianInfoStatusBar();
 
             if (!nextEnabled) {
                 vscode.window.showInformationMessage(
@@ -1388,7 +1370,7 @@ function registerCommands(context: vscode.ExtensionContext) {
             const milestone = await checkpointManager.startMilestone(name, intent, {
                 description: description || undefined
             });
-            updateMilestoneStatusBar(milestone.name);
+            updateGuardianInfoStatusBar(milestone.name);
             await checkpointManager.exportIntentFile();
             vscode.window.showInformationMessage(`🎯 Milestone started: ${milestone.name}`);
             treeProvider.refresh();
@@ -1457,7 +1439,7 @@ function registerCommands(context: vscode.ExtensionContext) {
                     );
                 }
             }
-            updateMilestoneStatusBar();
+            updateGuardianInfoStatusBar();
             treeProvider.refresh();
         })
     );
@@ -1499,7 +1481,7 @@ function registerCommands(context: vscode.ExtensionContext) {
             if (result) {
                 vscode.window.showInformationMessage(`🚫 Milestone abandoned: ${result.name}`);
             }
-            updateMilestoneStatusBar();
+            updateGuardianInfoStatusBar();
             treeProvider.refresh();
         })
     );
@@ -1899,7 +1881,7 @@ function setupEventListeners(context: vscode.ExtensionContext) {
     checkpointManager.onMilestoneChanged(() => {
         treeProvider.refresh();
         gitGraphTreeProvider.refresh();
-        updateMilestoneStatusBar();
+        updateGuardianInfoStatusBar();
     });
 }
 
@@ -1948,144 +1930,178 @@ function startAutoSaveTimer(context: vscode.ExtensionContext) {
 }
 
 /**
- * Creates the language status bar item
+ * Creates the two consolidated Guardian status bar items.
+ * Replaces the previous 6 individual status bar buttons.
  */
-function createLanguageStatusBar(context: vscode.ExtensionContext) {
-    languageStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    languageStatusBarItem.command = 'vibeCodeGuardian.toggleCommitLanguage';
-    languageStatusBarItem.tooltip = 'Click to toggle commit message language (EN/中文/Auto)';
-    
-    // Initialize with current setting
-    const settings = checkpointManager.getSettings();
-    updateLanguageStatusBar(settings.commitLanguage);
-    
-    languageStatusBarItem.show();
-    context.subscriptions.push(languageStatusBarItem);
+function createGuardianStatusBars(context: vscode.ExtensionContext) {
+    // Main button — left-most, always visible, opens the Guardian panel
+    guardianMainStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 102);
+    guardianMainStatusBarItem.command = 'vibeCodeGuardian.openGuardianPanel';
+    guardianMainStatusBarItem.text = '$(shield) Guardian';
+    guardianMainStatusBarItem.tooltip = 'Vibe Code Guardian — 点击展开功能面板';
+    guardianMainStatusBarItem.show();
+    context.subscriptions.push(guardianMainStatusBarItem);
+
+    // Info bar — shows active milestone name and tracking mode icon
+    guardianInfoStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 101);
+    guardianInfoStatusBarItem.command = 'vibeCodeGuardian.openGuardianPanel';
+    guardianInfoStatusBarItem.tooltip = '当前里程碑 — 点击展开功能面板';
+    updateGuardianInfoStatusBar();
+    guardianInfoStatusBarItem.show();
+    context.subscriptions.push(guardianInfoStatusBarItem);
 }
 
 /**
- * Updates the language status bar item text
+ * Updates the info status bar item with the current milestone and tracking mode.
  */
-function updateLanguageStatusBar(language: CommitLanguage) {
-    if (languageStatusBarItem) {
-        languageStatusBarItem.text = `$(globe) ${getLanguageDisplayName(language)}`;
-    }
-}
-
-/**
- * Creates the notification level status bar item
- */
-function createNotificationStatusBar(context: vscode.ExtensionContext) {
-    notificationStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
-    notificationStatusBarItem.command = 'vibeCodeGuardian.toggleNotificationLevel';
-    notificationStatusBarItem.tooltip = 'Click to toggle notification level (All/Milestone/None)';
-    
-    // Initialize with current setting
-    const settings = checkpointManager.getSettings();
-    updateNotificationStatusBar(settings.notificationLevel);
-    
-    notificationStatusBarItem.show();
-    context.subscriptions.push(notificationStatusBarItem);
-}
-
-/**
- * Updates the notification status bar item text
- */
-function updateNotificationStatusBar(level: NotificationLevel) {
-    if (notificationStatusBarItem) {
-        notificationStatusBarItem.text = getNotificationLevelDisplayName(level);
-    }
-}
-
-/**
- * Creates the push strategy status bar item
- */
-function createPushStrategyStatusBar(context: vscode.ExtensionContext) {
-    pushStrategyStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
-    pushStrategyStatusBarItem.command = 'vibeCodeGuardian.togglePushStrategy';
-    pushStrategyStatusBarItem.tooltip = 'Click to toggle push strategy (Milestone Only/All/None)';
-    
-    // Initialize with current setting
-    const settings = checkpointManager.getSettings();
-    updatePushStrategyStatusBar(settings.pushStrategy);
-    
-    pushStrategyStatusBarItem.show();
-    context.subscriptions.push(pushStrategyStatusBarItem);
-}
-
-/**
- * Updates the push strategy status bar item text
- */
-function updatePushStrategyStatusBar(strategy: PushStrategy) {
-    if (pushStrategyStatusBarItem) {
-        pushStrategyStatusBarItem.text = getPushStrategyDisplayName(strategy);
-    }
-}
-
-function createTrackingModeStatusBar(context: vscode.ExtensionContext) {
-    trackingModeStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 97);
-    trackingModeStatusBarItem.command = 'vibeCodeGuardian.toggleTrackingMode';
-    trackingModeStatusBarItem.tooltip = 'Click to toggle tracking mode (Full Tracking/Local Backup)';
-
-    const settings = checkpointManager.getSettings();
-    updateTrackingModeStatusBar(settings.trackingMode);
-
-    trackingModeStatusBarItem.show();
-    context.subscriptions.push(trackingModeStatusBarItem);
-}
-
-function updateTrackingModeStatusBar(mode: TrackingMode) {
-    if (trackingModeStatusBarItem) {
-        trackingModeStatusBarItem.text = getTrackingModeDisplayName(mode);
-    }
-}
-
-function createMilestoneToggleStatusBar(context: vscode.ExtensionContext) {
-    milestoneToggleStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 101);
-    milestoneToggleStatusBarItem.command = 'vibeCodeGuardian.toggleMilestone';
-    milestoneToggleStatusBarItem.tooltip = 'Click to toggle milestone feature ON/OFF';
-
-    const settings = checkpointManager.getSettings();
-    updateMilestoneToggleStatusBar(settings.milestoneEnabled);
-
-    milestoneToggleStatusBarItem.show();
-    context.subscriptions.push(milestoneToggleStatusBarItem);
-}
-
-function updateMilestoneToggleStatusBar(enabled: boolean) {
-    if (!milestoneToggleStatusBarItem) { return; }
-
-    milestoneToggleStatusBarItem.text = enabled ? '$(target) ON' : '$(target) OFF';
-    milestoneToggleStatusBarItem.backgroundColor = enabled
-        ? undefined
-        : new vscode.ThemeColor('statusBarItem.warningBackground');
-}
-
-/**
- * Creates the milestone status bar item
- */
-function createMilestoneStatusBar(context: vscode.ExtensionContext) {
-    milestoneStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    milestoneStatusBarItem.command = 'vibeCodeGuardian.showMilestones';
-    milestoneStatusBarItem.tooltip = 'Active milestone — click to manage milestones';
-    updateMilestoneStatusBar();
-    milestoneStatusBarItem.show();
-    context.subscriptions.push(milestoneStatusBarItem);
-}
-
-/**
- * Updates the milestone status bar item text
- */
-function updateMilestoneStatusBar(activeName?: string) {
-    if (!milestoneStatusBarItem) { return; }
+function updateGuardianInfoStatusBar(activeName?: string) {
+    if (!guardianInfoStatusBarItem) { return; }
     const name = activeName ?? checkpointManager?.getActiveMilestone()?.name;
+    const settings = checkpointManager?.getSettings();
+    const trackingIcon = settings?.trackingMode === 'full' ? '$(database)' : '$(device-floppy)';
+    const milestoneEnabled = settings?.milestoneEnabled ?? true;
+
     if (name) {
-        milestoneStatusBarItem.text = `$(milestone) ${name}`;
-        milestoneStatusBarItem.backgroundColor = undefined;
+        guardianInfoStatusBarItem.text = `$(milestone) ${name} ${trackingIcon}`;
+        guardianInfoStatusBarItem.backgroundColor = undefined;
+    } else if (!milestoneEnabled) {
+        guardianInfoStatusBarItem.text = `$(target) OFF ${trackingIcon}`;
+        guardianInfoStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     } else {
-        milestoneStatusBarItem.text = '$(milestone) No Milestone';
-        milestoneStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+        guardianInfoStatusBarItem.text = `$(milestone) 无里程碑 ${trackingIcon}`;
+        guardianInfoStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     }
+}
+
+/**
+ * Opens the Guardian feature panel — a QuickPick acting as a vertical expandable menu.
+ * Default action is milestone/group management.
+ */
+function showGuardianPanel() {
+    const settings = checkpointManager.getSettings();
+    const activeMilestone = checkpointManager.getActiveMilestone();
+
+    interface GuardianItem extends vscode.QuickPickItem {
+        action?: string;
+    }
+
+    const milestoneDesc = activeMilestone ? activeMilestone.name : '(无活跃里程碑)';
+    const trackingLabel = getTrackingModeDisplayName(settings.trackingMode);
+    const notifLabel = getNotificationLevelDisplayName(settings.notificationLevel);
+    const pushLabel = getPushStrategyDisplayName(settings.pushStrategy);
+    const langLabel = getLanguageDisplayName(settings.commitLanguage);
+    const milestoneToggleLabel = settings.milestoneEnabled ? '✅ 已启用' : '⭕ 已禁用';
+
+    const items: GuardianItem[] = [
+        // ── 分组管理 ──────────────────────────────────
+        { label: '里程碑 / 分组管理', kind: vscode.QuickPickItemKind.Separator },
+        {
+            label: '$(rocket) 开始新里程碑',
+            description: '设定任务意图，开始代码分组追踪',
+            action: 'startMilestone'
+        },
+        {
+            label: '$(check) 完成当前里程碑',
+            description: milestoneDesc,
+            action: 'completeMilestone'
+        },
+        {
+            label: '$(close) 放弃当前里程碑',
+            description: milestoneDesc,
+            action: 'abandonMilestone'
+        },
+        // ── 视图 ──────────────────────────────────────
+        { label: '视图', kind: vscode.QuickPickItemKind.Separator },
+        {
+            label: '$(list-tree) 打开时间线视图',
+            description: '查看 AI 分组变更历史',
+            action: 'showTimeline'
+        },
+        {
+            label: '$(git-branch) 打开 Git 图',
+            description: '守护者提交图谱',
+            action: 'showGitGraph'
+        },
+        {
+            label: '$(history) 管理里程碑',
+            action: 'showMilestones'
+        },
+        // ── 设置 ──────────────────────────────────────
+        { label: '设置', kind: vscode.QuickPickItemKind.Separator },
+        {
+            label: '$(record-keys) 追踪模式',
+            description: trackingLabel,
+            detail: '切换至下一模式（Full↔Local Backup）',
+            action: 'toggleTracking'
+        },
+        {
+            label: '$(bell) 通知级别',
+            description: notifLabel,
+            detail: '切换通知级别（All→Milestone→None）',
+            action: 'toggleNotification'
+        },
+        {
+            label: '$(cloud-upload) 推送策略',
+            description: pushLabel,
+            detail: '切换 Git 推送时机（None→Milestone→All）',
+            action: 'togglePush'
+        },
+        {
+            label: '$(globe) 提交语言',
+            description: langLabel,
+            detail: '切换提交信息语言（Auto→EN→中文）',
+            action: 'toggleLanguage'
+        },
+        {
+            label: '$(target) 里程碑功能',
+            description: milestoneToggleLabel,
+            detail: '开关里程碑追踪功能',
+            action: 'toggleMilestone'
+        },
+    ];
+
+    vscode.window.showQuickPick(items, {
+        title: '🛡️ Vibe Code Guardian',
+        placeHolder: '选择操作...',
+        matchOnDescription: true
+    }).then(selected => {
+        if (!selected?.action) { return; }
+        switch (selected.action) {
+            case 'startMilestone':
+                vscode.commands.executeCommand('vibeCodeGuardian.startMilestone');
+                break;
+            case 'completeMilestone':
+                vscode.commands.executeCommand('vibeCodeGuardian.completeMilestone');
+                break;
+            case 'abandonMilestone':
+                vscode.commands.executeCommand('vibeCodeGuardian.abandonMilestone');
+                break;
+            case 'showTimeline':
+                vscode.commands.executeCommand('vibeCodeGuardian.showTimeline');
+                break;
+            case 'showGitGraph':
+                vscode.commands.executeCommand('vibeCodeGuardian.showGitGraph');
+                break;
+            case 'showMilestones':
+                vscode.commands.executeCommand('vibeCodeGuardian.showMilestones');
+                break;
+            case 'toggleTracking':
+                vscode.commands.executeCommand('vibeCodeGuardian.toggleTrackingMode');
+                break;
+            case 'toggleNotification':
+                vscode.commands.executeCommand('vibeCodeGuardian.toggleNotificationLevel');
+                break;
+            case 'togglePush':
+                vscode.commands.executeCommand('vibeCodeGuardian.togglePushStrategy');
+                break;
+            case 'toggleLanguage':
+                vscode.commands.executeCommand('vibeCodeGuardian.toggleCommitLanguage');
+                break;
+            case 'toggleMilestone':
+                vscode.commands.executeCommand('vibeCodeGuardian.toggleMilestone');
+                break;
+        }
+    });
 }
 
 export function deactivate() {

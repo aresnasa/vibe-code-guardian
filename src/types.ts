@@ -32,6 +32,41 @@ export interface Checkpoint {
     branchName?: string;
     /** Milestone ID this checkpoint belongs to (intent grouping) */
     milestoneId?: string;
+    /** PromptGroup ID — links this checkpoint to a prompt-driven change group */
+    promptGroupId?: string;
+}
+
+// ============================================
+// PromptGroup Types - Prompt-driven change grouping
+// ============================================
+
+/**
+ * A PromptGroup aggregates consecutive checkpoints that originate from the
+ * same user prompt (sent to an AI tool) or a single user-edit session.
+ * It sits between a Milestone and individual Checkpoints in the hierarchy:
+ *   Milestone → PromptGroup → Checkpoint[]
+ */
+export interface PromptGroup {
+    /** Unique identifier */
+    id: string;
+    /** Auto-generated display name, e.g. "Copilot · 09:30" */
+    name: string;
+    /** Optional: the actual prompt text, if captured from clipboard or user input */
+    prompt?: string;
+    /** AI tool / source that triggered these changes */
+    source: CheckpointSource;
+    /** When the first checkpoint in this group was created */
+    createdAt: number;
+    /** When the most recent checkpoint was added */
+    lastUpdatedAt: number;
+    /** Ordered list of checkpoint IDs belonging to this group */
+    checkpointIds: string[];
+    /** Aggregated changed files across all checkpoints in this group */
+    changedFiles: ChangedFile[];
+    /** Session this group belongs to */
+    sessionId: string;
+    /** Milestone this group is associated with (if any) */
+    milestoneId?: string;
 }
 
 export enum CheckpointType {
@@ -180,6 +215,10 @@ export interface CheckpointStorageData {
     milestones: Milestone[];
     /** Currently active milestone ID */
     activeMilestoneId?: string;
+    /** All prompt groups (prompt-driven change batches) */
+    promptGroups: PromptGroup[];
+    /** Currently active prompt group ID */
+    activePromptGroupId?: string;
     /** Settings */
     settings: GuardianSettings;
 }

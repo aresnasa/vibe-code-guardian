@@ -20,7 +20,8 @@ import {
     PushStrategy,
     TrackingMode,
     Milestone,
-    MilestoneStatus
+    MilestoneStatus,
+    PromptGroup
 } from './types';
 import { GitManager } from './gitManager';
 import { generateLocalizedCheckpointName } from './languageConfig';
@@ -59,6 +60,8 @@ export class CheckpointManager {
                 ...data,
                 milestones: data.milestones ?? [],
                 activeMilestoneId: data.activeMilestoneId,
+                promptGroups: data.promptGroups ?? [],
+                activePromptGroupId: data.activePromptGroupId,
                 settings: { ...DEFAULT_SETTINGS, ...data.settings }
             };
         }
@@ -69,6 +72,8 @@ export class CheckpointManager {
             activeSessionId: undefined,
             milestones: [],
             activeMilestoneId: undefined,
+            promptGroups: [],
+            activePromptGroupId: undefined,
             settings: DEFAULT_SETTINGS
         };
     }
@@ -201,6 +206,23 @@ export class CheckpointManager {
         const sessionCheckpoints = this.getSessionCheckpoints();
         const parentId = sessionCheckpoints.length > 0 ? sessionCheckpoints[0].id : undefined;
 
+        // Resolve PromptGroup before constructing the checkpoint object
+        let promptGroupId: string | undefined;
+        if (type !== CheckpointType.SessionStart) {
+            const group = this.resolvePromptGroup(
+                source,
+                this.storageData.activeSessionId!,
+                this.storageData.activeMilestoneId
+            );
+            promptGroupId = group.id;
+        }
+
+        // When the user manually creates a checkpoint, close the active AI group so the
+        // next AI batch starts a fresh group rather than inheriting an old one.
+        if (source === CheckpointSource.User || type === CheckpointType.Manual) {
+            this.closeActivePromptGroup();
+        }
+
         const checkpoint: Checkpoint = {
             id,
             name,
@@ -215,10 +237,19 @@ export class CheckpointManager {
             tags: options?.tags || [],
             starred: false,
             branchName: this.getActiveSession()?.branchName,
-            milestoneId: this.storageData.activeMilestoneId
+            milestoneId: this.storageData.activeMilestoneId,
+            promptGroupId,
         };
 
         this.storageData.checkpoints.push(checkpoint);
+
+        // Link to active PromptGroup
+        if (promptGroupId) {
+            const group = this.getPromptGroup(promptGroupId);
+            if (group) {
+                this.linkCheckpointToPromptGroup(group, checkpoint);
+            }
+        }
 
         // Link to active milestone if one exists
         if (this.storageData.activeMilestoneId) {
@@ -816,6 +847,143 @@ export class CheckpointManager {
     }
 
     // ============================================
+    // PromptGroup Operations
+    // Groups consecutive AI-driven checkpoints from the same prompt session
+    // ============================================
+
+    /** Time window (ms): checkpoints within this window from the same source are auto-grouped */
+    private readonly PROMPT_GROUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
+    /** Sources that qualify for automatic prompt grouping */
+    private isGroupableSource(source: CheckpointSource): boolean {
+        return source === CheckpointSource.Copilot ||
+               source === CheckpointSource.Claude ||
+               source === CheckpointSource.Cline ||
+               source === CheckpointSource.OtherAI;
+    }
+
+    /** Display label for a CheckpointSource */
+    private getSourceLabel(source: CheckpointSource): string {
+        const labels: Partial<Record<CheckpointSource, string>> = {
+            [CheckpointSource.Copilot]: 'Copilot',
+            [CheckpointSource.Claude]: 'Claude',
+            [CheckpointSource.Cline]: 'Cline',
+            [CheckpointSource.OtherAI]: 'AI',
+            [CheckpointSource.User]: '用户',
+            [CheckpointSource.AutoSave]: 'AutoSave',
+        };
+        return labels[source] ?? String(source);
+    }
+
+    /**
+     * Determine whether a new checkpoint should be appended to the current active
+     * PromptGroup (same source, within the time window) or a fresh group should be created.
+     */
+    private resolvePromptGroup(
+        source: CheckpointSource,
+        sessionId: string,
+        milestoneId?: string
+    ): PromptGroup {
+        if (this.isGroupableSource(source)) {
+            const activeId = this.storageData.activePromptGroupId;
+            if (activeId) {
+                const active = this.storageData.promptGroups.find(g => g.id === activeId);
+                if (
+                    active &&
+                    active.source === source &&
+                    (Date.now() - active.lastUpdatedAt) < this.PROMPT_GROUP_WINDOW_MS
+                ) {
+                    return active; // reuse existing group
+                }
+            }
+        }
+
+        // Create a fresh group
+        const id = this.generateId();
+        const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        const group: PromptGroup = {
+            id,
+            name: `${this.getSourceLabel(source)} · ${time}`,
+            source,
+            createdAt: Date.now(),
+            lastUpdatedAt: Date.now(),
+            checkpointIds: [],
+            changedFiles: [],
+            sessionId,
+            milestoneId,
+        };
+        this.storageData.promptGroups.push(group);
+
+        if (this.isGroupableSource(source)) {
+            this.storageData.activePromptGroupId = id;
+        }
+
+        return group;
+    }
+
+    /**
+     * Link a checkpoint to a PromptGroup and update aggregated file list.
+     */
+    private linkCheckpointToPromptGroup(group: PromptGroup, checkpoint: Checkpoint): void {
+        if (!group.checkpointIds.includes(checkpoint.id)) {
+            group.checkpointIds.push(checkpoint.id);
+        }
+        group.lastUpdatedAt = checkpoint.timestamp;
+
+        // Merge changed files (deduplicate by path, keep latest)
+        for (const file of checkpoint.changedFiles) {
+            const existing = group.changedFiles.findIndex(f => f.path === file.path);
+            if (existing === -1) {
+                group.changedFiles.push({ ...file });
+            } else {
+                group.changedFiles[existing] = {
+                    ...group.changedFiles[existing],
+                    linesAdded: group.changedFiles[existing].linesAdded + file.linesAdded,
+                    linesRemoved: group.changedFiles[existing].linesRemoved + file.linesRemoved,
+                    currentContent: file.currentContent,
+                };
+            }
+        }
+    }
+
+    /**
+     * Close the active PromptGroup — called when the user manually saves/creates a
+     * checkpoint or when the session ends, signalling the end of an AI prompt round.
+     */
+    public closeActivePromptGroup(): void {
+        this.storageData.activePromptGroupId = undefined;
+    }
+
+    /** Get all PromptGroups, newest first */
+    public getPromptGroups(): PromptGroup[] {
+        // When createdAt ties (common in tests), use insertion order (higher index = newer) as tiebreaker
+        const withIndex = this.storageData.promptGroups.map((g, i) => ({ g, i }));
+        withIndex.sort((a, b) => b.g.createdAt - a.g.createdAt || b.i - a.i);
+        return withIndex.map(({ g }) => g);
+    }
+
+    /** Get a PromptGroup by ID */
+    public getPromptGroup(id: string): PromptGroup | undefined {
+        return this.storageData.promptGroups.find(g => g.id === id);
+    }
+
+    /** Get the checkpoints belonging to a PromptGroup, in creation order */
+    public getPromptGroupCheckpoints(promptGroupId: string): Checkpoint[] {
+        const group = this.getPromptGroup(promptGroupId);
+        if (!group) { return []; }
+        return this.storageData.checkpoints
+            .filter(cp => group.checkpointIds.includes(cp.id))
+            .sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    /** Get PromptGroups that belong to a given Milestone */
+    public getMilestonePromptGroups(milestoneId: string): PromptGroup[] {
+        return this.storageData.promptGroups
+            .filter(g => g.milestoneId === milestoneId)
+            .sort((a, b) => b.createdAt - a.createdAt);
+    }
+
+    // ============================================
     // Milestone Operations
     // ============================================
 
@@ -1108,6 +1276,8 @@ export class CheckpointManager {
             activeSessionId: undefined,
             milestones: [],
             activeMilestoneId: undefined,
+            promptGroups: [],
+            activePromptGroupId: undefined,
             settings: DEFAULT_SETTINGS
         };
         await this.saveStorageData();

@@ -4,7 +4,7 @@
  */
 
 import * as vscode from 'vscode';
-import { Checkpoint, CheckpointType, CheckpointSource, CodingSession, Milestone, MilestoneStatus } from './types';
+import { Checkpoint, CheckpointType, CheckpointSource, CodingSession, Milestone, MilestoneStatus, PromptGroup } from './types';
 import { CheckpointManager } from './checkpointManager';
 
 export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineItem> {
@@ -46,9 +46,15 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         }
 
         if (element.contextValue === 'milestone' || element.contextValue === 'milestone-active') {
-            // Show checkpoints under this milestone
+            // Show checkpoints under this milestone, grouped by PromptGroup
             const milestoneId = element.milestoneId!;
-            const checkpoints = this.checkpointManager.getMilestoneCheckpoints(milestoneId);
+            return Promise.resolve(this.getMilestoneChildren(milestoneId));
+        }
+
+        if (element.contextValue === 'prompt-group') {
+            // Show checkpoints under this PromptGroup
+            const promptGroupId = element.promptGroupId!;
+            const checkpoints = this.checkpointManager.getPromptGroupCheckpoints(promptGroupId);
             return Promise.resolve(checkpoints.map(cp => this.createCheckpointItem(cp)));
         }
 
@@ -186,8 +192,131 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         return item;
     }
 
-    private createOrphanGroup(count: number): TimelineItem {
+    /**
+     * Build the children list for a Milestone node.
+     * Layout:
+     *   - PromptGroups with ≥2 checkpoints → collapsible group item
+     *   - PromptGroups with exactly 1 checkpoint → inline checkpoint item (no extra nesting)
+     *   - Checkpoints without a promptGroupId → shown directly
+     */
+    private getMilestoneChildren(milestoneId: string): TimelineItem[] {
+        const allCheckpoints = this.checkpointManager.getMilestoneCheckpoints(milestoneId);
+        const promptGroups = this.checkpointManager.getMilestonePromptGroups(milestoneId);
+
+        // Build a set of checkpoint IDs that are covered by multi-checkpoint groups
+        const coveredByGroup = new Set<string>();
+        const multiGroups = promptGroups.filter(g => g.checkpointIds.length > 1);
+        for (const g of multiGroups) {
+            for (const cpId of g.checkpointIds) {
+                coveredByGroup.add(cpId);
+            }
+        }
+
+        const items: TimelineItem[] = [];
+
+        // Track which groups + ungrouped checkpoints have been emitted so we preserve
+        // chronological order (newest first, matching getSessionCheckpoints sort order).
+        const addedGroupIds = new Set<string>();
+        const allCheckpointsSorted = [...allCheckpoints].sort((a, b) => b.timestamp - a.timestamp);
+
+        for (const cp of allCheckpointsSorted) {
+            if (cp.promptGroupId) {
+                const group = promptGroups.find(g => g.id === cp.promptGroupId);
+                if (group && group.checkpointIds.length > 1) {
+                    // Multi-checkpoint group: emit the group header once
+                    if (!addedGroupIds.has(group.id)) {
+                        items.push(this.createPromptGroupItem(group));
+                        addedGroupIds.add(group.id);
+                    }
+                    // The checkpoint itself is shown when the group is expanded (via getChildren)
+                    continue;
+                }
+            }
+            // Single-checkpoint group or ungrouped: show the checkpoint directly
+            items.push(this.createCheckpointItem(cp));
+        }
+
+        return items;
+    }
+
+    /** Build a tree item for a PromptGroup */
+    private createPromptGroupItem(group: PromptGroup): TimelineItem {
+        const sourceIcon = this.getSourceEmoji(group.source);
+        const cpCount = group.checkpointIds.length;
+        const fileCount = group.changedFiles.length;
+        const timeRange = this.formatGroupTimeRange(group);
+
+        const label = `${sourceIcon} ${group.name}`;
+        const description = `${cpCount} saves · ${fileCount} files · ${timeRange}`;
+
         const item = new TimelineItem(
+            label,
+            description,
+            vscode.TreeItemCollapsibleState.Collapsed
+        );
+        item.contextValue = 'prompt-group';
+        item.promptGroupId = group.id;
+        item.iconPath = new vscode.ThemeIcon('repo-forked', this.getSourceColor(group.source));
+        item.tooltip = this.createPromptGroupTooltip(group);
+        return item;
+    }
+
+    private createPromptGroupTooltip(group: PromptGroup): vscode.MarkdownString {
+        const md = new vscode.MarkdownString();
+        md.appendMarkdown(`### ${this.getSourceEmoji(group.source)} ${group.name}\n\n`);
+        if (group.prompt) {
+            md.appendMarkdown(`**Prompt:** ${group.prompt}\n\n`);
+        }
+        md.appendMarkdown(`**Source:** ${group.source}\n\n`);
+        md.appendMarkdown(`**Started:** ${new Date(group.createdAt).toLocaleString('zh-CN')}\n\n`);
+        md.appendMarkdown(`**Last update:** ${new Date(group.lastUpdatedAt).toLocaleString('zh-CN')}\n\n`);
+        md.appendMarkdown(`**Checkpoints:** ${group.checkpointIds.length}\n\n`);
+        if (group.changedFiles.length > 0) {
+            md.appendMarkdown(`**Changed files:**\n`);
+            for (const f of group.changedFiles.slice(0, 8)) {
+                const name = f.path.split('/').pop();
+                md.appendMarkdown(`- ${name} (+${f.linesAdded}/-${f.linesRemoved})\n`);
+            }
+            if (group.changedFiles.length > 8) {
+                md.appendMarkdown(`- … and ${group.changedFiles.length - 8} more\n`);
+            }
+        }
+        return md;
+    }
+
+    private getSourceEmoji(source: CheckpointSource): string {
+        const map: Partial<Record<CheckpointSource, string>> = {
+            [CheckpointSource.Copilot]: '🤖',
+            [CheckpointSource.Claude]: '🟠',
+            [CheckpointSource.Cline]: '🟣',
+            [CheckpointSource.OtherAI]: '✨',
+            [CheckpointSource.User]: '👤',
+            [CheckpointSource.AutoSave]: '⏰',
+        };
+        return map[source] ?? '📦';
+    }
+
+    private getSourceColor(source: CheckpointSource): vscode.ThemeColor | undefined {
+        const map: Partial<Record<CheckpointSource, string>> = {
+            [CheckpointSource.Copilot]: 'charts.blue',
+            [CheckpointSource.Claude]: 'charts.orange',
+            [CheckpointSource.Cline]: 'charts.purple',
+            [CheckpointSource.OtherAI]: 'charts.green',
+        };
+        const colorId = map[source];
+        return colorId ? new vscode.ThemeColor(colorId) : undefined;
+    }
+
+    private formatGroupTimeRange(group: PromptGroup): string {
+        const start = new Date(group.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        if (group.createdAt === group.lastUpdatedAt) {
+            return start;
+        }
+        const end = new Date(group.lastUpdatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        return `${start} – ${end}`;
+    }
+
+    private createOrphanGroup(count: number): TimelineItem {        const item = new TimelineItem(
             '📋 Untracked checkpoints',
             `${count} checkpoints without a milestone`,
             vscode.TreeItemCollapsibleState.Collapsed
@@ -409,6 +538,7 @@ export class TimelineItem extends vscode.TreeItem {
     public sessionId?: string;
     public checkpointId?: string;
     public milestoneId?: string;
+    public promptGroupId?: string;
     
     constructor(
         public readonly label: string,
