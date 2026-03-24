@@ -101,6 +101,68 @@ bump_version() {
     echo "$new_version"
 }
 
+# Query the VS Code Marketplace for the currently published version.
+# Returns empty string if unavailable (offline / not yet published).
+get_marketplace_version() {
+    command_exists npx || { echo ""; return; }
+    npx @vscode/vsce show "${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}" \
+        --json --no-dependencies 2>/dev/null \
+        | python3 -c \
+            "import sys,json
+try:
+    d=json.load(sys.stdin)
+    print(d.get('versions',[{}])[0].get('version',''))
+except Exception:
+    print('')" 2>/dev/null \
+        || echo ""
+}
+
+# Compare two semver strings.  Echoes: lt | eq | gt
+semver_compare() {
+    local a="$1" b="$2"
+    [ "$a" = "$b" ] && { echo "eq"; return; }
+    local lower
+    lower=$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)
+    [ "$lower" = "$a" ] && echo "lt" || echo "gt"
+}
+
+# Fetch the Marketplace version, align local package.json if behind, then bump.
+# Usage: new_version=$(check_and_sync_version patch|minor|major)
+check_and_sync_version() {
+    local bump_type="${1:-patch}"
+
+    log_step "Checking VS Code Marketplace version"
+
+    local local_version
+    local_version=$(get_version)
+
+    local market_version
+    market_version=$(get_marketplace_version)
+
+    if [ -z "$market_version" ]; then
+        log_warning "Could not fetch Marketplace version – proceeding with local v${local_version}"
+    else
+        log_info "Local:       v${local_version}"
+        log_info "Marketplace: v${market_version}"
+
+        local cmp
+        cmp=$(semver_compare "$local_version" "$market_version")
+
+        if [ "$cmp" = "lt" ] || [ "$cmp" = "eq" ]; then
+            log_warning "Local v${local_version} is not ahead of Marketplace v${market_version} – syncing to Marketplace version first"
+            sed -i '' "s/\"version\": \"${local_version}\"/\"version\": \"${market_version}\"/" package.json
+            local_version="$market_version"
+        else
+            log_success "Local v${local_version} is already ahead of Marketplace v${market_version}"
+        fi
+    fi
+
+    local new_version
+    new_version=$(bump_version "$bump_type")
+    log_success "Version: v${local_version} → v${new_version}"
+    echo "$new_version"
+}
+
 # ── Preflight checks ─────────────────────────────────────────────────────────
 preflight_check() {
     local target="$1"  # build | package | publish
@@ -700,6 +762,22 @@ do_publish() {
 
     log_banner "🚀 Publishing Vibe Code Guardian v${version}"
 
+    # ── Version gate: warn if Marketplace already has this version ────────
+    local market_version
+    market_version=$(get_marketplace_version)
+    if [ -n "$market_version" ]; then
+        local cmp
+        cmp=$(semver_compare "$version" "$market_version")
+        if [ "$cmp" = "eq" ]; then
+            log_error "v${version} is already published on the Marketplace. Bump the version first (use 'full' mode)."
+            return 1
+        elif [ "$cmp" = "lt" ]; then
+            log_error "Local v${version} is BEHIND Marketplace v${market_version}. Run 'full' mode to sync and bump."
+            return 1
+        fi
+        log_success "Version check OK: v${version} > Marketplace v${market_version}"
+    fi
+
     # ── Gate: tests must pass before publish ─────────────────────────────
     log_step "Pre-publish gate: running all tests"
     do_test || {
@@ -833,9 +911,7 @@ case "$MODE" in
 
     full)
         preflight_check publish
-        log_step "Bumping ${VERSION_BUMP} version"
-        new_version=$(bump_version "$VERSION_BUMP")
-        log_success "Version → ${new_version}"
+        new_version=$(check_and_sync_version "$VERSION_BUMP")
 
         check_hard_reset
         do_build
