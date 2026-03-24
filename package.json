@@ -2,7 +2,7 @@
   "name": "vibe-code-guardian",
   "displayName": "Vibe Code Guardian",
   "description": "Game-like checkpoint system for AI-assisted coding - save, load, and rollback your vibe coding sessions",
-  "version": "0.13.0",
+  "version": "0.15.0",
   "publisher": "vibe-coder",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -279,6 +279,30 @@
         "command": "vibeCodeGuardian.showGitGraphFileDiff",
         "title": "Show File Diff in Graph",
         "icon": "$(diff)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showBranches",
+        "title": "Show Branch Manager",
+        "icon": "$(git-branch)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showContributors",
+        "title": "Show Contributors",
+        "icon": "$(organization)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showStashes",
+        "title": "Show Stash Manager",
+        "icon": "$(archive)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.showRemotes",
+        "title": "Show Remote Manager",
+        "icon": "$(cloud)",
         "category": "Vibe Guardian"
       },
       {

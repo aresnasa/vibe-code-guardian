@@ -7,7 +7,12 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { CheckpointManager } from '../checkpointManager';
 import { TimelineTreeProvider } from '../timelineTreeProvider';
-import { CheckpointSource, CheckpointType, DEFAULT_SETTINGS, FileChangeType, MilestoneStatus } from '../types';
+import { GitManager } from '../gitManager';
+import {
+	CheckpointSource, CheckpointType, DEFAULT_SETTINGS, FileChangeType, MilestoneStatus,
+	GitContributor, GitStash, GitRemote, GitBranchDetail,
+	ExtensionToWebviewMessage, WebviewToExtensionMessage
+} from '../types';
 
 class MockWorkspaceState implements vscode.Memento {
 	private readonly store = new Map<string, unknown>();
@@ -452,3 +457,517 @@ suite('Extension Test Suite', () => {
 			'all group children should be checkpoint items');
 	});
 });
+
+// ══════════════════════════════════════════════════════════════════
+// Git Graph — Type shape validation
+// ══════════════════════════════════════════════════════════════════
+suite('Git Graph Types', () => {
+	test('GitContributor has required fields', () => {
+		const c: GitContributor = {
+			name: 'Alice',
+			email: 'alice@example.com',
+			commitCount: 42,
+			firstCommitDate: '2025-01-01T00:00:00Z',
+			lastCommitDate: '2026-03-01T00:00:00Z',
+		};
+		assert.strictEqual(c.name, 'Alice');
+		assert.strictEqual(c.commitCount, 42);
+		assert.ok(c.firstCommitDate < c.lastCommitDate, 'firstCommitDate should be earlier');
+	});
+
+	test('GitStash has required fields', () => {
+		const s: GitStash = {
+			index: 0,
+			ref: 'stash@{0}',
+			branch: 'main',
+			message: 'WIP on main: abc1234 feat: partial',
+			authorName: 'Bob',
+			date: '2026-03-24T10:00:00Z',
+		};
+		assert.strictEqual(s.index, 0);
+		assert.ok(s.ref.startsWith('stash@{'), 'ref should be stash ref format');
+		assert.strictEqual(s.branch, 'main');
+	});
+
+	test('GitRemote has required fields', () => {
+		const r: GitRemote = {
+			name: 'origin',
+			fetchUrl: 'https://github.com/example/repo.git',
+			pushUrl: 'https://github.com/example/repo.git',
+		};
+		assert.strictEqual(r.name, 'origin');
+		assert.ok(r.fetchUrl.startsWith('https://'));
+	});
+
+	test('GitBranchDetail has required fields including ahead/behind', () => {
+		const b: GitBranchDetail = {
+			name: 'feature/new-ui',
+			isCurrent: true,
+			commitHash: 'abc1234567890abcdef',
+			isRemote: false,
+			ahead: 3,
+			behind: 1,
+			tracking: 'origin/feature/new-ui',
+		};
+		assert.strictEqual(b.ahead, 3);
+		assert.strictEqual(b.behind, 1);
+		assert.strictEqual(b.tracking, 'origin/feature/new-ui');
+	});
+
+	test('GitBranchDetail.tracking is optional', () => {
+		const b: GitBranchDetail = {
+			name: 'local-only',
+			isCurrent: false,
+			commitHash: 'def456',
+			isRemote: false,
+			ahead: 0,
+			behind: 0,
+		};
+		assert.strictEqual(b.tracking, undefined);
+	});
+
+	test('ExtensionToWebviewMessage union covers all new types', () => {
+		const msgs: ExtensionToWebviewMessage[] = [
+			{ type: 'stashList', data: [] },
+			{ type: 'contributors', data: [] },
+			{ type: 'remotes', data: [] },
+			{ type: 'branchDetails', data: [] },
+			{ type: 'operationResult', success: true, message: 'ok', operation: 'createBranch' },
+		];
+		const knownTypes = new Set(msgs.map(m => m.type));
+		assert.ok(knownTypes.has('stashList'));
+		assert.ok(knownTypes.has('contributors'));
+		assert.ok(knownTypes.has('remotes'));
+		assert.ok(knownTypes.has('branchDetails'));
+		assert.ok(knownTypes.has('operationResult'));
+	});
+
+	test('WebviewToExtensionMessage union covers all new operation types', () => {
+		const msgs: WebviewToExtensionMessage[] = [
+			{ type: 'requestStashes' },
+			{ type: 'requestContributors' },
+			{ type: 'requestRemotes' },
+			{ type: 'requestBranchDetails' },
+			{ type: 'createBranch', name: 'feat/x' },
+			{ type: 'checkoutBranch', name: 'main' },
+			{ type: 'deleteBranch', name: 'old', force: false },
+			{ type: 'mergeBranch', name: 'dev', strategy: 'no-ff' },
+			{ type: 'rebaseBranch', name: 'main' },
+			{ type: 'applyStash', index: 0 },
+			{ type: 'popStash', index: 0 },
+			{ type: 'dropStash', index: 1 },
+			{ type: 'createStash', message: 'wip' },
+			{ type: 'fetchRemote', remote: 'origin' },
+			{ type: 'pullBranch', remote: 'origin', branch: 'main', rebase: false },
+			{ type: 'pushBranch', remote: 'origin', branch: 'main', force: false },
+		];
+		assert.strictEqual(msgs.length, 16, 'All 16 new message types should be covered');
+		const types = new Set(msgs.map(m => m.type));
+		assert.strictEqual(types.size, 16, 'All types should be distinct');
+	});
+
+	test('mergeBranch strategy enum values', () => {
+		const strategies: Array<'ff' | 'no-ff' | 'squash'> = ['ff', 'no-ff', 'squash'];
+		const msg: WebviewToExtensionMessage = { type: 'mergeBranch', name: 'dev', strategy: 'squash' };
+		assert.ok(strategies.includes((msg as any).strategy), 'squash is valid strategy');
+	});
+});
+
+// ══════════════════════════════════════════════════════════════════
+// GitManager — new method unit tests (mock git)
+// ══════════════════════════════════════════════════════════════════
+suite('GitManager — multi-user / multi-branch operations', () => {
+
+	function makeGitManager(fakeGit: object): GitManager {
+		const mgr = new GitManager();
+		(mgr as any).git = fakeGit;
+		return mgr;
+	}
+
+	// ── getContributors ───────────────────────────────────────────
+	test('getContributors: returns empty array when git is not initialized', async () => {
+		const mgr = new GitManager();
+		(mgr as any).git = null;
+		const result = await mgr.getContributors();
+		assert.deepStrictEqual(result, []);
+	});
+
+	test('getContributors: parses log output and aggregates by email', async () => {
+		const fakeGit = {
+			raw: async (args: string[]) => {
+				assert.ok(args.includes('log'), 'should call git log');
+				return [
+					'Alice\talice@example.com\t2026-03-01T10:00:00Z',
+					'Bob\tbob@example.com\t2026-02-15T08:00:00Z',
+					'Alice\talice@example.com\t2026-01-10T09:00:00Z',
+					'Alice\talice@example.com\t2025-12-01T12:00:00Z',
+				].join('\n');
+			}
+		};
+		const mgr = makeGitManager(fakeGit);
+		const result = await mgr.getContributors();
+		// Alice appears 3 times, Bob once — sorted by commitCount desc
+		assert.strictEqual(result.length, 2);
+		assert.strictEqual(result[0].name, 'Alice');
+		assert.strictEqual(result[0].commitCount, 3);
+		assert.strictEqual(result[0].email, 'alice@example.com');
+		assert.strictEqual(result[1].name, 'Bob');
+		assert.strictEqual(result[1].commitCount, 1);
+	});
+
+	test('getContributors: returns empty array on empty git log', async () => {
+		const fakeGit = {
+			raw: async () => '   '
+		};
+		const result = await makeGitManager(fakeGit).getContributors();
+		assert.deepStrictEqual(result, []);
+	});
+
+	test('getContributors: email matching is case-insensitive', async () => {
+		const fakeGit = {
+			raw: async () => [
+				'Alice\tAlice@Example.COM\t2026-03-01T10:00:00Z',
+				'alice\talice@example.com\t2026-02-01T10:00:00Z',
+			].join('\n')
+		};
+		const result = await makeGitManager(fakeGit).getContributors();
+		assert.strictEqual(result.length, 1, 'Same email in different case should be merged');
+		assert.strictEqual(result[0].commitCount, 2);
+	});
+
+	test('getContributors: returns empty array when git throws', async () => {
+		const fakeGit = {
+			raw: async () => { throw new Error('git error'); }
+		};
+		const result = await makeGitManager(fakeGit).getContributors();
+		assert.deepStrictEqual(result, []);
+	});
+
+	// ── getStashList ──────────────────────────────────────────────
+	test('getStashList: returns empty array when git is not initialized', async () => {
+		const mgr = new GitManager();
+		(mgr as any).git = null;
+		assert.deepStrictEqual(await mgr.getStashList(), []);
+	});
+
+	test('getStashList: parses stash list output correctly', async () => {
+		const fakeGit = {
+			raw: async () =>
+				'stash@{0}\tAlice\t2026-03-24T10:00:00Z\tWIP on main: abc1234 partial work\n' +
+				'stash@{1}\tBob\t2026-03-23T08:00:00Z\tOn feature/ui: UI changes'
+		};
+		const result = await makeGitManager(fakeGit).getStashList();
+		assert.strictEqual(result.length, 2);
+		assert.strictEqual(result[0].ref, 'stash@{0}');
+		assert.strictEqual(result[0].authorName, 'Alice');
+		assert.strictEqual(result[0].branch, 'main');
+		assert.strictEqual(result[0].index, 0);
+		assert.strictEqual(result[1].ref, 'stash@{1}');
+		assert.strictEqual(result[1].branch, 'feature/ui');
+		assert.strictEqual(result[1].index, 1);
+	});
+
+	test('getStashList: returns empty array on empty stash', async () => {
+		const fakeGit = {
+			raw: async () => ''
+		};
+		assert.deepStrictEqual(await makeGitManager(fakeGit).getStashList(), []);
+	});
+
+	// ── applyStash / popStash / dropStash ─────────────────────────
+	test('applyStash: returns success:true when git succeeds', async () => {
+		const fakeGit = {
+			raw: async (args: string[]) => {
+				assert.deepStrictEqual(args, ['stash', 'apply', 'stash@{2}']);
+				return '';
+			}
+		};
+		const result = await makeGitManager(fakeGit).applyStash(2);
+		assert.strictEqual(result.success, true);
+		assert.ok(result.message.includes('2'));
+	});
+
+	test('applyStash: returns success:false when git throws', async () => {
+		const fakeGit = {
+			raw: async () => { throw new Error('conflict'); }
+		};
+		const result = await makeGitManager(fakeGit).applyStash(0);
+		assert.strictEqual(result.success, false);
+		assert.ok(result.message.includes('conflict') || result.message.includes('failed'));
+	});
+
+	test('popStash: calls stash pop with correct ref', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			raw: async (args: string[]) => { calledArgs = args; return ''; }
+		};
+		await makeGitManager(fakeGit).popStash(1);
+		assert.deepStrictEqual(calledArgs, ['stash', 'pop', 'stash@{1}']);
+	});
+
+	test('dropStash: calls stash drop with correct ref', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			raw: async (args: string[]) => { calledArgs = args; return ''; }
+		};
+		const result = await makeGitManager(fakeGit).dropStash(3);
+		assert.deepStrictEqual(calledArgs, ['stash', 'drop', 'stash@{3}']);
+		assert.strictEqual(result.success, true);
+	});
+
+	test('createStash: passes message when provided', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			stash: async (args: string[]) => { calledArgs = args; return ''; }
+		};
+		const result = await makeGitManager(fakeGit).createStash('my wip');
+		assert.ok(calledArgs.includes('push'), 'should call stash push');
+		assert.ok(calledArgs.includes('-m'), 'should pass -m flag');
+		assert.ok(calledArgs.includes('my wip'), 'should include the message text');
+		assert.strictEqual(result.success, true);
+	});
+
+	test('createStash: omits message when not provided', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			stash: async (args: string[]) => { calledArgs = args; return ''; }
+		};
+		const result = await makeGitManager(fakeGit).createStash();
+		assert.ok(calledArgs.includes('push'), 'should call stash push');
+		assert.ok(!calledArgs.includes('-m'), 'should not include -m when no message');
+		assert.strictEqual(result.success, true);
+	});
+
+	// ── getRemoteList ─────────────────────────────────────────────
+	test('getRemoteList: returns empty array when git is not initialized', async () => {
+		const mgr = new GitManager();
+		(mgr as any).git = null;
+		assert.deepStrictEqual(await mgr.getRemoteList(), []);
+	});
+
+	test('getRemoteList: maps simpleGit remotes to GitRemote shape', async () => {
+		const fakeGit = {
+			getRemotes: async (verbose: boolean) => {
+				assert.strictEqual(verbose, true, 'should call getRemotes(true) for URL info');
+				return [
+					{ name: 'origin', refs: { fetch: 'https://github.com/foo/bar.git', push: 'https://github.com/foo/bar.git' } },
+					{ name: 'upstream', refs: { fetch: 'https://github.com/upstream/bar.git', push: '' } },
+				];
+			}
+		};
+		const result = await makeGitManager(fakeGit).getRemoteList();
+		assert.strictEqual(result.length, 2);
+		assert.strictEqual(result[0].name, 'origin');
+		assert.strictEqual(result[0].fetchUrl, 'https://github.com/foo/bar.git');
+		assert.strictEqual(result[1].name, 'upstream');
+	});
+
+	// ── fetchRemote ───────────────────────────────────────────────
+	test('fetchRemote: calls fetch --all --prune when remote is --all', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			fetch: async (args: string[]) => { calledArgs = args; return {}; }
+		};
+		const result = await makeGitManager(fakeGit).fetchRemote('--all');
+		assert.ok(calledArgs.includes('--all'));
+		assert.ok(calledArgs.includes('--prune'));
+		assert.strictEqual(result.success, true);
+	});
+
+	test('fetchRemote: calls fetch with specific remote name', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			fetch: async (args: string[]) => { calledArgs = args; return {}; }
+		};
+		await makeGitManager(fakeGit).fetchRemote('upstream');
+		assert.ok(calledArgs.includes('upstream'));
+	});
+
+	test('fetchRemote: returns success:false on error', async () => {
+		const fakeGit = {
+			fetch: async () => { throw new Error('network error'); }
+		};
+		const result = await makeGitManager(fakeGit).fetchRemote('origin');
+		assert.strictEqual(result.success, false);
+	});
+
+	// ── mergeBranch ───────────────────────────────────────────────
+	test('mergeBranch: uses --no-ff flag for no-ff strategy', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			raw: async (args: string[]) => { calledArgs = args; return ''; }
+		};
+		const result = await makeGitManager(fakeGit).mergeBranch('feature/x', 'no-ff');
+		assert.ok(calledArgs.includes('--no-ff'));
+		assert.ok(calledArgs.includes('feature/x'));
+		assert.strictEqual(result.success, true);
+		assert.ok(result.message.includes('no-ff'));
+	});
+
+	test('mergeBranch: uses --squash flag for squash strategy', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			raw: async (args: string[]) => { calledArgs = args; return ''; }
+		};
+		await makeGitManager(fakeGit).mergeBranch('dev', 'squash');
+		assert.ok(calledArgs.includes('--squash'));
+		assert.ok(!calledArgs.includes('--no-ff'), 'squash should not include --no-ff');
+	});
+
+	test('mergeBranch: ff strategy has no extra flags', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			raw: async (args: string[]) => { calledArgs = args; return ''; }
+		};
+		await makeGitManager(fakeGit).mergeBranch('main', 'ff');
+		assert.ok(!calledArgs.includes('--no-ff'));
+		assert.ok(!calledArgs.includes('--squash'));
+		assert.ok(calledArgs.includes('main'));
+	});
+
+	test('mergeBranch: returns success:false when merge fails', async () => {
+		const fakeGit = {
+			raw: async () => { throw new Error('conflict'); }
+		};
+		const result = await makeGitManager(fakeGit).mergeBranch('conflicting-branch', 'no-ff');
+		assert.strictEqual(result.success, false);
+	});
+
+	// ── rebaseBranch ──────────────────────────────────────────────
+	test('rebaseBranch: calls git rebase <base>', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			rebase: async (args: string[]) => { calledArgs = args; return ''; }
+		};
+		const result = await makeGitManager(fakeGit).rebaseBranch('main');
+		assert.ok(calledArgs.includes('main'));
+		assert.strictEqual(result.success, true);
+		assert.ok(result.message.includes('main'));
+	});
+
+	test('rebaseBranch: returns success:false when rebase fails', async () => {
+		const fakeGit = {
+			rebase: async () => { throw new Error('conflict during rebase'); }
+		};
+		const result = await makeGitManager(fakeGit).rebaseBranch('main');
+		assert.strictEqual(result.success, false);
+	});
+
+	// ── deleteBranch ──────────────────────────────────────────────
+	test('deleteBranch: uses -d for non-force delete', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			branch: async (args: string[]) => { calledArgs = args; return {}; }
+		};
+		const result = await makeGitManager(fakeGit).deleteBranch('old-feature', false);
+		assert.ok(calledArgs.includes('-d'));
+		assert.ok(calledArgs.includes('old-feature'));
+		assert.ok(!calledArgs.includes('-D'));
+		assert.strictEqual(result.success, true);
+	});
+
+	test('deleteBranch: uses -D for force delete', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			branch: async (args: string[]) => { calledArgs = args; return {}; }
+		};
+		await makeGitManager(fakeGit).deleteBranch('stale-branch', true);
+		assert.ok(calledArgs.includes('-D'));
+		assert.ok(!calledArgs.includes('-d'));
+	});
+
+	test('deleteBranch: returns success:false when branch does not exist', async () => {
+		const fakeGit = {
+			branch: async () => { throw new Error('branch not found'); }
+		};
+		const result = await makeGitManager(fakeGit).deleteBranch('nonexistent', false);
+		assert.strictEqual(result.success, false);
+	});
+
+	// ── renameBranch ─────────────────────────────────────────────
+	test('renameBranch: calls git branch -m <old> <new>', async () => {
+		let calledArgs: string[] = [];
+		const fakeGit = {
+			branch: async (args: string[]) => { calledArgs = args; return {}; }
+		};
+		const result = await makeGitManager(fakeGit).renameBranch('old-name', 'new-name');
+		assert.deepStrictEqual(calledArgs, ['-m', 'old-name', 'new-name']);
+		assert.strictEqual(result.success, true);
+	});
+
+	// ── getBranchDetails ──────────────────────────────────────────
+	test('getBranchDetails: returns empty array when git is not initialized', async () => {
+		const mgr = new GitManager();
+		(mgr as any).git = null;
+		assert.deepStrictEqual(await mgr.getBranchDetails(), []);
+	});
+
+	test('getBranchDetails: parses current branch with asterisk', async () => {
+		const fakeGit = {
+			raw: async (args: string[]) => {
+				assert.ok(args.includes('-vv') && args.includes('--all'));
+				return '* main                 abc1234567 [origin/main] Latest commit\n  feature/ui          def5678901 [origin/feature/ui: ahead 2, behind 1] UI work\n  remotes/origin/main  abc1234567 Latest commit';
+			}
+		};
+		const result = await makeGitManager(fakeGit).getBranchDetails();
+		const main = result.find(b => b.name === 'main');
+		assert.ok(main, 'main branch should be found');
+		assert.strictEqual(main!.isCurrent, true, 'main should be current');
+		assert.strictEqual(main!.tracking, 'origin/main');
+	});
+
+	test('getBranchDetails: parses ahead/behind correctly', async () => {
+		const fakeGit = {
+			raw: async () =>
+				'  feature/new-ui  abc123 [origin/feature/new-ui: ahead 3, behind 2] Some commit\n'
+		};
+		const result = await makeGitManager(fakeGit).getBranchDetails();
+		const br = result.find(b => b.name === 'feature/new-ui');
+		assert.ok(br);
+		assert.strictEqual(br!.ahead, 3);
+		assert.strictEqual(br!.behind, 2);
+	});
+
+	test('getBranchDetails: marks remote branches correctly', async () => {
+		const fakeGit = {
+			raw: async () =>
+				'  remotes/origin/main  abc1234 HEAD commit\n  remotes/origin/dev  def5678 dev commit\n'
+		};
+		const result = await makeGitManager(fakeGit).getBranchDetails();
+		assert.ok(result.every(b => b.isRemote), 'all branches should be remote');
+		assert.ok(result.every(b => b.isCurrent === false), 'remotes are not current');
+	});
+
+	test('getBranchDetails: branch with no tracking has ahead/behind as 0', async () => {
+		const fakeGit = {
+			raw: async () =>
+				'  local-only  abc123 Local only commit\n'
+		};
+		const result = await makeGitManager(fakeGit).getBranchDetails();
+		const br = result[0];
+		assert.strictEqual(br.ahead, 0);
+		assert.strictEqual(br.behind, 0);
+		assert.strictEqual(br.tracking, undefined);
+	});
+
+	// ── pullBranch ────────────────────────────────────────────────
+	test('pullBranch: passes --rebase flag when rebase is true', async () => {
+		let calledOpts: any;
+		const fakeGit = {
+			pull: async (remote: string, branch: string, opts: any) => { calledOpts = opts; return {}; }
+		};
+		const result = await makeGitManager(fakeGit).pullBranch('origin', 'main', true);
+		assert.ok(calledOpts.includes('--rebase'), 'should pass --rebase option');
+		assert.strictEqual(result.success, true);
+	});
+
+	test('pullBranch: no --rebase flag when rebase is false', async () => {
+		let calledOpts: any;
+		const fakeGit = {
+			pull: async (remote: string, branch: string, opts: any) => { calledOpts = opts; return {}; }
+		};
+		await makeGitManager(fakeGit).pullBranch('origin', 'main', false);
+		assert.ok(!calledOpts.includes('--rebase'));
+	});
+});
+

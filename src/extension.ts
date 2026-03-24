@@ -1789,6 +1789,22 @@ function registerCommands(context: vscode.ExtensionContext) {
             );
         })
     );
+
+    // ── Git Graph multi-tab shortcuts ──────────────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.showBranches', async () => {
+            await gitGraphWebview.show(undefined, 'branches');
+        }),
+        vscode.commands.registerCommand('vibeCodeGuardian.showContributors', async () => {
+            await gitGraphWebview.show(undefined, 'contributors');
+        }),
+        vscode.commands.registerCommand('vibeCodeGuardian.showStashes', async () => {
+            await gitGraphWebview.show(undefined, 'stashes');
+        }),
+        vscode.commands.registerCommand('vibeCodeGuardian.showRemotes', async () => {
+            await gitGraphWebview.show(undefined, 'remotes');
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {

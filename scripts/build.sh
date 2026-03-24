@@ -219,7 +219,7 @@ do_package() {
     local vsix="vibe-code-guardian-${version}.vsix"
 
     log_step "Creating ${vsix}"
-    npx @vscode/vsce package
+    npx @vscode/vsce package --no-dependencies
 
     if [ -f "$vsix" ]; then
         local size
@@ -280,17 +280,17 @@ publish_vscode() {
     log_step "Publishing v${version}"
 
     if [ "$DRY_RUN" = "true" ]; then
-        log_warning "[DRY RUN] Would run: npx @vscode/vsce publish"
+        log_warning "[DRY RUN] Would run: npx @vscode/vsce publish --no-dependencies"
         return 0
     fi
 
-    if npx @vscode/vsce publish; then
+    if npx @vscode/vsce publish --no-dependencies; then
         log_success "Published v${version} to VS Code Marketplace"
         log_info "URL: https://marketplace.visualstudio.com/items?itemName=${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}"
     else
         local rc=$?
         # "already exists" is not a real failure when re-publishing the same version
-        if npx @vscode/vsce show "${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}" --json 2>/dev/null | grep -q "\"version\":\"${version}\""; then
+        if npx @vscode/vsce show "${VSCODE_PUBLISHER}.${ZED_EXTENSION_ID}" --json --no-dependencies 2>/dev/null | grep -q "\"version\":\"${version}\""; then
             log_warning "v${version} already exists on Marketplace — skipping"
         else
             log_error "vsce publish exited with code ${rc}"

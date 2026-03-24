@@ -13,6 +13,7 @@ export class GitGraphWebviewManager {
     private gitGraphProvider: GitGraphProvider;
     private mode: 'guardian' | 'full' = 'guardian';
     private disposables: vscode.Disposable[] = [];
+    private pendingTab: string | undefined;
 
     constructor(
         private context: vscode.ExtensionContext,
@@ -21,14 +22,16 @@ export class GitGraphWebviewManager {
         this.gitGraphProvider = new GitGraphProvider(gitManager);
     }
 
-    public async show(focusCommitHash?: string): Promise<void> {
+    public async show(focusCommitHash?: string, initialTab?: string): Promise<void> {
+        if (initialTab) { this.pendingTab = initialTab; }
         if (this.panel) {
             this.panel.reveal(vscode.ViewColumn.One);
             if (focusCommitHash) {
-                this.panel.webview.postMessage({
-                    type: 'focusCommit',
-                    hash: focusCommitHash
-                });
+                this.panel.webview.postMessage({ type: 'focusCommit', hash: focusCommitHash });
+            }
+            if (initialTab) {
+                this.panel.webview.postMessage({ type: 'switchTab', tab: initialTab });
+                this.pendingTab = undefined;
             }
             return;
         }
@@ -90,6 +93,10 @@ export class GitGraphWebviewManager {
                     if (initialFocusHash) {
                         this.panel?.webview.postMessage({ type: 'focusCommit', hash: initialFocusHash });
                     }
+                    if (this.pendingTab) {
+                        this.panel?.webview.postMessage({ type: 'switchTab', tab: this.pendingTab });
+                        this.pendingTab = undefined;
+                    }
                 } catch (err) {
                     this.panel?.webview.postMessage({ type: 'error', message: String(err) });
                 }
@@ -120,7 +127,6 @@ export class GitGraphWebviewManager {
             case 'requestFileDiff': {
                 try {
                     const diff = await this.gitManager.getDiff(`${message.hash}^`, message.hash);
-                    // Filter diff to only the requested file
                     const fileDiff = this.extractFileDiff(diff, message.filePath);
                     this.panel?.webview.postMessage({
                         type: 'diffContent',
@@ -149,6 +155,181 @@ export class GitGraphWebviewManager {
                     await this.gitManager.checkoutCommit(message.hash);
                     vscode.window.showInformationMessage(`Rolled back to ${message.hash.substring(0, 7)}`);
                 }
+                break;
+            }
+            // ── Multi-user / multi-branch / stash / remote operations ──────
+            case 'requestStashes': {
+                try {
+                    const stashes = await this.gitManager.getStashList();
+                    this.panel?.webview.postMessage({ type: 'stashList', data: stashes });
+                } catch (err) {
+                    this.panel?.webview.postMessage({ type: 'error', message: String(err) });
+                }
+                break;
+            }
+            case 'requestContributors': {
+                try {
+                    const contributors = await this.gitManager.getContributors();
+                    this.panel?.webview.postMessage({ type: 'contributors', data: contributors });
+                } catch (err) {
+                    this.panel?.webview.postMessage({ type: 'error', message: String(err) });
+                }
+                break;
+            }
+            case 'requestRemotes': {
+                try {
+                    const remotes = await this.gitManager.getRemoteList();
+                    this.panel?.webview.postMessage({ type: 'remotes', data: remotes });
+                } catch (err) {
+                    this.panel?.webview.postMessage({ type: 'error', message: String(err) });
+                }
+                break;
+            }
+            case 'requestBranchDetails': {
+                try {
+                    const branches = await this.gitManager.getBranchDetails();
+                    this.panel?.webview.postMessage({ type: 'branchDetails', data: branches });
+                } catch (err) {
+                    this.panel?.webview.postMessage({ type: 'error', message: String(err) });
+                }
+                break;
+            }
+            case 'createBranch': {
+                const created = await this.gitManager.createBranchFromHere(message.name);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: created === true, operation: 'createBranch',
+                    message: created ? `Created branch '${message.name}'` : `Failed to create branch '${message.name}'`
+                });
+                if (created) { await this.refresh(); }
+                break;
+            }
+            case 'checkoutBranch': {
+                const branchName = message.name.replace(/^remotes\/[^/]+\//, '');
+                const ok = await this.gitManager.checkoutBranch(branchName);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: ok, operation: 'checkoutBranch',
+                    message: ok ? `Switched to '${branchName}'` : `Failed to checkout '${branchName}'`
+                });
+                if (ok) { await this.refresh(); }
+                break;
+            }
+            case 'deleteBranch': {
+                const res = await this.gitManager.deleteBranch(message.name, message.force);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'deleteBranch',
+                    message: res.message
+                });
+                if (res.success) { await this.refresh(); }
+                break;
+            }
+            case 'mergeBranch': {
+                const confirmed = await vscode.window.showWarningMessage(
+                    `Merge '${message.name}' into current branch (${message.strategy})?`,
+                    { modal: true }, 'Merge', 'Cancel'
+                );
+                if (confirmed !== 'Merge') { break; }
+                const res = await this.gitManager.mergeBranch(message.name, message.strategy);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'mergeBranch',
+                    message: res.message
+                });
+                if (res.success) { await this.refresh(); }
+                break;
+            }
+            case 'rebaseBranch': {
+                const confirmed = await vscode.window.showWarningMessage(
+                    `Rebase current branch onto '${message.name}'?`,
+                    { modal: true,
+                      detail: 'This rewrites commit history. Only do this on branches not yet pushed to shared remotes.' },
+                    'Rebase', 'Cancel'
+                );
+                if (confirmed !== 'Rebase') { break; }
+                const res = await this.gitManager.rebaseBranch(message.name);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'rebaseBranch',
+                    message: res.message
+                });
+                if (res.success) { await this.refresh(); }
+                break;
+            }
+            case 'applyStash': {
+                const res = await this.gitManager.applyStash(message.index);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'applyStash',
+                    message: res.message
+                });
+                if (res.success) { await this.refresh(); }
+                break;
+            }
+            case 'popStash': {
+                const res = await this.gitManager.popStash(message.index);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'popStash',
+                    message: res.message
+                });
+                if (res.success) { await this.refresh(); }
+                break;
+            }
+            case 'dropStash': {
+                const confirmed = await vscode.window.showWarningMessage(
+                    `Drop stash@{${message.index}}? This cannot be undone.`,
+                    { modal: true }, 'Drop', 'Cancel'
+                );
+                if (confirmed !== 'Drop') { break; }
+                const res = await this.gitManager.dropStash(message.index);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'dropStash',
+                    message: res.message
+                });
+                if (res.success) {
+                    const stashes = await this.gitManager.getStashList();
+                    this.panel?.webview.postMessage({ type: 'stashList', data: stashes });
+                }
+                break;
+            }
+            case 'createStash': {
+                const res = await this.gitManager.createStash(message.message);
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'createStash',
+                    message: res.message
+                });
+                if (res.success) {
+                    const stashes = await this.gitManager.getStashList();
+                    this.panel?.webview.postMessage({ type: 'stashList', data: stashes });
+                }
+                break;
+            }
+            case 'fetchRemote': {
+                this.panel?.webview.postMessage({ type: 'loading', loading: true });
+                const res = await this.gitManager.fetchRemote(message.remote);
+                this.panel?.webview.postMessage({ type: 'loading', loading: false });
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'fetch',
+                    message: res.message
+                });
+                if (res.success) { await this.refresh(); }
+                break;
+            }
+            case 'pullBranch': {
+                this.panel?.webview.postMessage({ type: 'loading', loading: true });
+                const res = await this.gitManager.pullBranch(message.remote, message.branch || undefined, message.rebase);
+                this.panel?.webview.postMessage({ type: 'loading', loading: false });
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'pull',
+                    message: res.message
+                });
+                if (res.success) { await this.refresh(); }
+                break;
+            }
+            case 'pushBranch': {
+                this.panel?.webview.postMessage({ type: 'loading', loading: true });
+                const res = await this.gitManager.pushBranch(message.remote, message.branch, message.force);
+                this.panel?.webview.postMessage({ type: 'loading', loading: false });
+                this.panel?.webview.postMessage({
+                    type: 'operationResult', success: res.success, operation: 'push',
+                    message: res.message
+                });
+                if (res.success) { await this.refresh(); }
                 break;
             }
         }
@@ -229,15 +410,15 @@ export class GitGraphWebviewManager {
 <title>Git Graph</title>
 <style nonce="${nonce}">
 :root {
-    --row-height: 32px;
-    --lane-width: 16px;
-    --node-radius: 5;
-    --graph-left-pad: 12px;
+    --row-height: 28px;
+    --lane-width: 14px;
+    --node-radius: 4;
+    --graph-left-pad: 10px;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
     font-family: var(--vscode-font-family, monospace);
-    font-size: var(--vscode-font-size, 13px);
+    font-size: var(--vscode-font-size, 12px);
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
     overflow: hidden;
@@ -245,144 +426,127 @@ body {
     flex-direction: column;
     height: 100vh;
 }
-
-/* Toolbar */
-.toolbar {
+.tab-bar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
     background: var(--vscode-sideBar-background);
     border-bottom: 1px solid var(--vscode-panel-border);
     flex-shrink: 0;
+    overflow-x: auto;
+}
+.tab-btn {
+    padding: 6px 14px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0.7;
+}
+.tab-btn:hover { opacity: 1; }
+.tab-btn.active {
+    border-bottom-color: var(--vscode-focusBorder);
+    opacity: 1;
+    font-weight: 600;
+}
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--vscode-sideBar-background);
+    border-bottom: 1px solid var(--vscode-panel-border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
 }
 .toolbar button {
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
     border: none;
-    padding: 4px 10px;
+    padding: 3px 8px;
     cursor: pointer;
     border-radius: 3px;
-    font-size: 12px;
+    font-size: 11px;
 }
-.toolbar button:hover {
-    background: var(--vscode-button-secondaryHoverBackground);
-}
+.toolbar button:hover { background: var(--vscode-button-secondaryHoverBackground); }
 .toolbar button.active {
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
 }
 .toolbar .spacer { flex: 1; }
+.toolbar select {
+    background: var(--vscode-dropdown-background);
+    color: var(--vscode-dropdown-foreground);
+    border: 1px solid var(--vscode-dropdown-border);
+    border-radius: 3px;
+    padding: 2px 4px;
+    font-size: 11px;
+    max-width: 200px;
+}
 .toolbar .branch-info {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--vscode-descriptionForeground);
 }
-
-/* Main content area */
-.main-content {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    overflow: hidden;
-}
-
-/* Graph area */
+.tab-panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.tab-panel.active { display: flex; }
 .graph-container {
     flex: 1;
     overflow-y: auto;
     overflow-x: auto;
     min-height: 0;
 }
-.graph-table {
-    width: 100%;
-    border-collapse: collapse;
-}
+.graph-table { width: 100%; border-collapse: collapse; }
 .graph-row {
     height: var(--row-height);
     cursor: pointer;
     transition: background 0.1s;
 }
-.graph-row:hover {
-    background: var(--vscode-list-hoverBackground);
-}
+.graph-row:hover { background: var(--vscode-list-hoverBackground); }
 .graph-row.selected {
     background: var(--vscode-list-activeSelectionBackground);
     color: var(--vscode-list-activeSelectionForeground);
 }
-.graph-row.guardian-commit .commit-msg {
-    font-weight: 600;
-}
-.graph-row.dimmed {
-    opacity: 0.5;
-}
-.graph-cell {
-    vertical-align: middle;
-    white-space: nowrap;
-    padding: 0;
-    height: var(--row-height);
-}
-.graph-cell-svg {
-    width: auto;
-    min-width: 30px;
-}
+.graph-row.guardian-commit .commit-msg { font-weight: 600; }
+.graph-row.dimmed { opacity: 0.4; }
+.graph-row.author-dimmed { opacity: 0.22; }
+.graph-cell { vertical-align: middle; white-space: nowrap; padding: 0; height: var(--row-height); }
+.graph-cell-svg { width: auto; min-width: 24px; }
 .commit-hash {
     font-family: var(--vscode-editor-font-family, monospace);
     color: var(--vscode-textLink-foreground);
-    padding: 0 6px;
-    font-size: 12px;
-}
-.commit-msg {
-    padding: 0 6px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 500px;
-}
-.commit-author {
-    padding: 0 6px;
-    color: var(--vscode-descriptionForeground);
-    font-size: 12px;
-}
-.commit-date {
-    padding: 0 6px;
-    color: var(--vscode-descriptionForeground);
-    font-size: 12px;
-    text-align: right;
-}
-.ref-badge {
-    display: inline-block;
-    padding: 1px 5px;
-    border-radius: 3px;
+    padding: 0 5px;
     font-size: 11px;
-    margin-left: 4px;
-    font-weight: 600;
 }
-.ref-badge.branch {
-    background: var(--vscode-badge-background);
-    color: var(--vscode-badge-foreground);
-}
-.ref-badge.tag {
-    background: var(--vscode-editorWarning-foreground);
-    color: var(--vscode-editor-background);
-}
-.ref-badge.head {
-    background: var(--vscode-gitDecoration-addedResourceForeground);
-    color: var(--vscode-editor-background);
-}
-.guardian-badge {
+.commit-msg { padding: 0 5px; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+.commit-author { padding: 0 5px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.commit-date { padding: 0 5px; color: var(--vscode-descriptionForeground); font-size: 11px; text-align: right; }
+.ref-badge {
     display: inline-block;
     padding: 1px 4px;
     border-radius: 3px;
     font-size: 10px;
-    margin-left: 4px;
+    margin-left: 3px;
+    font-weight: 600;
+}
+.ref-badge.branch { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.ref-badge.remote { background: #2d5c8a; color: #cce4ff; }
+.ref-badge.tag { background: var(--vscode-editorWarning-foreground); color: var(--vscode-editor-background); }
+.ref-badge.head { background: var(--vscode-gitDecoration-addedResourceForeground); color: var(--vscode-editor-background); }
+.guardian-badge {
+    display: inline-block;
+    padding: 1px 3px;
+    border-radius: 2px;
+    font-size: 9px;
+    margin-left: 3px;
     background: var(--vscode-gitDecoration-addedResourceForeground);
     color: var(--vscode-editor-background);
 }
-
-/* Detail panel */
 .detail-panel {
     border-top: 2px solid var(--vscode-panel-border);
     background: var(--vscode-sideBar-background);
-    max-height: 40vh;
+    max-height: 38vh;
     overflow-y: auto;
     display: none;
     flex-shrink: 0;
@@ -391,94 +555,72 @@ body {
 .detail-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 6px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--vscode-panel-border);
+    position: sticky;
+    top: 0;
+    background: var(--vscode-sideBar-background);
+    z-index: 1;
 }
-.detail-header .close-btn {
+.close-btn {
     margin-left: auto;
     background: none;
     border: none;
     color: var(--vscode-foreground);
     cursor: pointer;
     font-size: 16px;
-    padding: 2px 6px;
+    padding: 1px 5px;
 }
-.detail-header .close-btn:hover {
-    background: var(--vscode-toolbar-hoverBackground);
-}
-.detail-body {
-    padding: 8px 12px;
-}
-.detail-body .commit-info {
-    margin-bottom: 8px;
-    font-size: 12px;
-    color: var(--vscode-descriptionForeground);
-}
-.detail-body .commit-full-msg {
-    margin-bottom: 12px;
-    padding: 6px;
+.close-btn:hover { background: var(--vscode-toolbar-hoverBackground); }
+.detail-body { padding: 6px 10px; }
+.commit-info { margin-bottom: 6px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+.commit-full-msg {
+    margin-bottom: 10px;
+    padding: 5px;
     background: var(--vscode-editor-background);
     border-radius: 3px;
     white-space: pre-wrap;
-    font-size: 13px;
+    font-size: 12px;
 }
 .file-list { list-style: none; }
 .file-list li {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 0;
-    font-size: 12px;
+    gap: 5px;
+    padding: 2px 0;
+    font-size: 11px;
     cursor: pointer;
 }
-.file-list li:hover {
-    background: var(--vscode-list-hoverBackground);
-}
-.file-status {
-    font-weight: 700;
-    width: 14px;
-    text-align: center;
-}
+.file-list li:hover { background: var(--vscode-list-hoverBackground); }
+.file-status { font-weight: 700; width: 12px; text-align: center; }
 .file-status.added { color: var(--vscode-gitDecoration-addedResourceForeground); }
 .file-status.modified { color: var(--vscode-gitDecoration-modifiedResourceForeground); }
 .file-status.deleted { color: var(--vscode-gitDecoration-deletedResourceForeground); }
 .file-status.renamed { color: var(--vscode-gitDecoration-renamedResourceForeground, #73c991); }
-.file-stats {
-    color: var(--vscode-descriptionForeground);
-    margin-left: auto;
-    font-family: var(--vscode-editor-font-family, monospace);
-}
+.file-stats { color: var(--vscode-descriptionForeground); margin-left: auto; font-family: monospace; font-size: 10px; }
 .file-stats .additions { color: var(--vscode-gitDecoration-addedResourceForeground); }
 .file-stats .deletions { color: var(--vscode-gitDecoration-deletedResourceForeground); }
-.file-actions {
-    display: flex;
-    gap: 4px;
-    margin-left: 8px;
-}
+.file-actions { display: flex; gap: 3px; margin-left: 6px; }
 .file-actions button {
     background: none;
     border: none;
     color: var(--vscode-textLink-foreground);
     cursor: pointer;
-    font-size: 11px;
-    padding: 1px 4px;
+    font-size: 10px;
+    padding: 1px 3px;
 }
-.file-actions button:hover {
-    text-decoration: underline;
-}
-
-/* Diff preview */
+.file-actions button:hover { text-decoration: underline; }
 .diff-preview {
-    margin-top: 8px;
-    padding: 6px;
+    margin-top: 6px;
+    padding: 5px;
     background: var(--vscode-editor-background);
     border-radius: 3px;
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 12px;
+    font-size: 11px;
     overflow-x: auto;
     white-space: pre;
-    max-height: 300px;
+    max-height: 250px;
     overflow-y: auto;
     display: none;
 }
@@ -486,36 +628,134 @@ body {
 .diff-line-add { color: var(--vscode-gitDecoration-addedResourceForeground); }
 .diff-line-del { color: var(--vscode-gitDecoration-deletedResourceForeground); }
 .diff-line-hunk { color: var(--vscode-textLink-foreground); font-weight: 600; }
-
-/* Loading / Error */
-.loading-overlay {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 14px;
+.panel-content { flex: 1; overflow-y: auto; padding: 6px 10px; }
+.section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
     color: var(--vscode-descriptionForeground);
+    padding: 6px 4px 2px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+    margin-top: 4px;
+}
+.branch-item, .stash-item, .remote-item, .contributor-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+.branch-item:hover, .stash-item:hover, .remote-item:hover, .contributor-item:hover {
+    background: var(--vscode-list-hoverBackground);
+}
+.branch-item.current { font-weight: 700; }
+.branch-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-tracking { font-size: 10px; color: var(--vscode-descriptionForeground); margin-left: 4px; white-space: nowrap; }
+.ahead-behind { font-size: 10px; margin-left: 4px; }
+.ahead { color: var(--vscode-gitDecoration-addedResourceForeground); }
+.behind { color: var(--vscode-gitDecoration-deletedResourceForeground); }
+.item-actions { display: flex; gap: 2px; margin-left: 6px; flex-shrink: 0; }
+.item-actions button {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: none;
+    padding: 2px 5px;
+    cursor: pointer;
+    border-radius: 2px;
+    font-size: 10px;
+    white-space: nowrap;
+}
+.item-actions button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.item-actions button.danger { color: var(--vscode-gitDecoration-deletedResourceForeground); }
+.contributor-bar-wrap { flex: 1; margin: 0 8px; background: var(--vscode-editor-background); border-radius: 2px; height: 6px; overflow: hidden; min-width: 40px; }
+.contributor-bar { height: 100%; background: var(--vscode-badge-background); border-radius: 2px; }
+.contributor-count { font-size: 10px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+.author-filter-active { font-weight: 700; color: var(--vscode-focusBorder); }
+.toast {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    z-index: 9999;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+    max-width: 320px;
+}
+.toast.success { background: rgba(35,134,54,0.92); color:#fff; }
+.toast.error   { background: rgba(180,50,50,0.92);  color:#fff; }
+.toast.show    { opacity: 1; }
+.loading-overlay {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 13px;
+    color: var(--vscode-descriptionForeground);
+    background: var(--vscode-editor-background);
+    padding: 8px 16px;
+    border-radius: 4px;
     display: none;
+    z-index: 8888;
 }
 .loading-overlay.visible { display: block; }
+.inline-form {
+    display: flex;
+    gap: 4px;
+    padding: 4px 6px;
+    align-items: center;
+}
+.inline-form input {
+    flex: 1;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 11px;
+}
+.inline-form button {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: none;
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+}
+.inline-form button.cancel {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+}
 </style>
 </head>
 <body>
-<div class="toolbar">
-    <button id="btn-guardian" class="active" onclick="switchMode('guardian')">Guardian</button>
-    <button id="btn-full" onclick="switchMode('full')">Full History</button>
-    <button onclick="refreshGraph()">Refresh</button>
-    <span class="spacer"></span>
-    <span class="branch-info" id="branch-info"></span>
+<div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('graph')">&#9913; Graph</button>
+    <button class="tab-btn" onclick="showTab('branches')">&#xa652; Branches</button>
+    <button class="tab-btn" onclick="showTab('contributors')">&#128100; Contributors</button>
+    <button class="tab-btn" onclick="showTab('stashes')">&#128230; Stashes</button>
+    <button class="tab-btn" onclick="showTab('remotes')">&#9729; Remotes</button>
 </div>
-
-<div class="main-content">
-    <div class="graph-container" id="graph-container">
-        <table class="graph-table" id="graph-table">
+<div class="tab-panel active" id="tab-graph">
+    <div class="toolbar">
+        <button id="btn-guardian" class="active" onclick="switchMode('guardian')">Guardian</button>
+        <button id="btn-full" onclick="switchMode('full')">Full History</button>
+        <button onclick="refreshGraph()">&#8635; Refresh</button>
+        <span>Author:</span>
+        <select id="author-filter" onchange="applyAuthorFilter()">
+            <option value="">All</option>
+        </select>
+        <span class="spacer"></span>
+        <span class="branch-info" id="branch-info"></span>
+    </div>
+    <div class="graph-container">
+        <table class="graph-table">
             <tbody id="graph-body"></tbody>
         </table>
     </div>
-
     <div class="detail-panel" id="detail-panel">
         <div class="detail-header">
             <strong id="detail-title">Commit Details</strong>
@@ -524,349 +764,502 @@ body {
         <div class="detail-body" id="detail-body"></div>
     </div>
 </div>
-
-<div class="loading-overlay" id="loading">Loading graph...</div>
-
+<div class="tab-panel" id="tab-branches">
+    <div class="toolbar">
+        <button onclick="loadBranches()">&#8635; Refresh</button>
+        <button onclick="toggleCreateBranchForm()">+ New Branch</button>
+        <span class="spacer"></span>
+        <span class="branch-info" id="branch-info-2"></span>
+    </div>
+    <div id="create-branch-form" style="display:none">
+        <div class="inline-form">
+            <input id="new-branch-name" type="text" placeholder="branch-name"
+                   onkeydown="if(event.key==='Enter')doCreateBranch()"/>
+            <button onclick="doCreateBranch()">Create</button>
+            <button class="cancel" onclick="toggleCreateBranchForm()">Cancel</button>
+        </div>
+    </div>
+    <div class="panel-content" id="branch-list-content">
+        <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading branches...</div>
+    </div>
+</div>
+<div class="tab-panel" id="tab-contributors">
+    <div class="toolbar">
+        <button onclick="loadContributors()">&#8635; Refresh</button>
+        <button id="clear-author-btn" onclick="clearAuthorFilter()" style="display:none">&#10005; Clear filter</button>
+        <span class="spacer"></span>
+        <span id="active-author-label" class="author-filter-active"></span>
+    </div>
+    <div class="panel-content" id="contributor-list-content">
+        <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading contributors...</div>
+    </div>
+</div>
+<div class="tab-panel" id="tab-stashes">
+    <div class="toolbar">
+        <button onclick="loadStashes()">&#8635; Refresh</button>
+        <button onclick="doCreateStash()">+ Save Stash</button>
+        <span class="spacer"></span>
+    </div>
+    <div class="panel-content" id="stash-list-content">
+        <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading stashes...</div>
+    </div>
+</div>
+<div class="tab-panel" id="tab-remotes">
+    <div class="toolbar">
+        <button onclick="loadRemotes()">&#8635; Refresh</button>
+        <button onclick="doFetchAll()">&#8595; Fetch All</button>
+        <span class="spacer"></span>
+    </div>
+    <div class="panel-content" id="remote-list-content">
+        <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading remotes...</div>
+    </div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="loading-overlay" id="loading">Loading...</div>
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
-
 const LANE_COLORS = [
-    '#4dc9f6', '#f67019', '#f53794', '#537bc4',
-    '#acc236', '#166a8f', '#00a950', '#8549ba',
-    '#e6194b', '#3cb44b'
+    '#4dc9f6','#f67019','#f53794','#537bc4',
+    '#acc236','#166a8f','#00a950','#8549ba',
+    '#e6194b','#3cb44b','#ffe119','#4363d8',
+    '#f58231','#911eb4','#42d4f4','#bfef45'
 ];
+const ROW_HEIGHT = 28;
+const LANE_WIDTH = 14;
+const NODE_RADIUS = 4;
+let currentData   = null;
+let selectedHash  = null;
+let currentMode   = 'guardian';
+let activeAuthor  = '';
 
-const ROW_HEIGHT = 32;
-const LANE_WIDTH = 16;
-const NODE_RADIUS = 5;
-const GRAPH_LEFT_PAD = 12;
-
-let currentData = null;
-let selectedHash = null;
-let currentMode = 'guardian';
-
-// Signal ready
 vscode.postMessage({ type: 'ready' });
 
-window.addEventListener('message', event => {
-    const msg = event.data;
-    switch (msg.type) {
+window.addEventListener('message', ev => {
+    const m = ev.data;
+    switch (m.type) {
         case 'graphData':
             document.getElementById('loading').classList.remove('visible');
-            currentData = msg.data;
-            renderGraph(msg.data);
+            currentData = m.data;
+            renderGraph(m.data);
+            updateAuthorSelect(m.data);
             break;
-        case 'commitDetail':
-            renderCommitDetail(msg.data);
-            break;
-        case 'diffContent':
-            renderDiffPreview(msg.data);
-            break;
-        case 'loading':
-            if (msg.loading) {
-                document.getElementById('loading').classList.add('visible');
-            } else {
-                document.getElementById('loading').classList.remove('visible');
-            }
-            break;
-        case 'error':
-            document.getElementById('loading').classList.remove('visible');
-            console.error('Error:', msg.message);
-            break;
-        case 'focusCommit':
-            focusOnCommit(msg.hash);
-            break;
+        case 'commitDetail':   renderCommitDetail(m.data); break;
+        case 'diffContent':    renderDiffPreview(m.data);  break;
+        case 'loading':        document.getElementById('loading').classList.toggle('visible', !!m.loading); break;
+        case 'error':          document.getElementById('loading').classList.remove('visible'); showToast('Error: ' + m.message, 'error'); break;
+        case 'focusCommit':    focusOnCommit(m.hash); break;
+        case 'stashList':      renderStashList(m.data); break;
+        case 'contributors':   renderContributorList(m.data); break;
+        case 'remotes':        renderRemoteList(m.data); break;
+        case 'branchDetails':  renderBranchList(m.data); break;
+        case 'operationResult': showToast(m.message, m.success ? 'success' : 'error'); break;
+        case 'switchTab':      showTab(m.tab); break;
     }
 });
+
+function showTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    document.querySelectorAll('.tab-btn').forEach(b => {
+        if (b.getAttribute('onclick') === "showTab('" + name + "')") b.classList.add('active');
+    });
+    if (name === 'branches')     loadBranches();
+    if (name === 'contributors') loadContributors();
+    if (name === 'stashes')      loadStashes();
+    if (name === 'remotes')      loadRemotes();
+}
 
 function switchMode(mode) {
     currentMode = mode;
     document.getElementById('btn-guardian').classList.toggle('active', mode === 'guardian');
     document.getElementById('btn-full').classList.toggle('active', mode === 'full');
-    vscode.postMessage({ type: 'requestGraphData', mode: mode, maxCount: 200 });
+    vscode.postMessage({ type: 'requestGraphData', mode, maxCount: 300 });
+}
+function refreshGraph() { vscode.postMessage({ type: 'requestGraphData', mode: currentMode, maxCount: 300 }); }
+
+function updateAuthorSelect(data) {
+    const sel = document.getElementById('author-filter');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">All</option>';
+    const names = [...new Set((data.commits || []).map(c => c.authorName))].sort();
+    names.forEach(n => {
+        const o = document.createElement('option');
+        o.value = n; o.textContent = n;
+        if (n === prev) o.selected = true;
+        sel.appendChild(o);
+    });
 }
 
-function refreshGraph() {
-    vscode.postMessage({ type: 'requestGraphData', mode: currentMode, maxCount: 200 });
+function applyAuthorFilter() {
+    activeAuthor = document.getElementById('author-filter').value;
+    updateContributorFilterUI();
+    if (currentData) renderGraph(currentData);
+}
+
+function filterByAuthor(name) {
+    activeAuthor = name;
+    document.getElementById('author-filter').value = name;
+    updateContributorFilterUI();
+    if (currentData) renderGraph(currentData);
+    showTab('graph');
+}
+
+function clearAuthorFilter() { filterByAuthor(''); }
+
+function updateContributorFilterUI() {
+    document.getElementById('active-author-label').textContent =
+        activeAuthor ? 'Filtered: ' + activeAuthor : '';
+    document.getElementById('clear-author-btn').style.display = activeAuthor ? '' : 'none';
 }
 
 function renderGraph(data) {
     const tbody = document.getElementById('graph-body');
     tbody.innerHTML = '';
-
-    // Update branch info
-    const branchInfo = document.getElementById('branch-info');
-    if (data.isDetached) {
-        branchInfo.textContent = 'HEAD detached at ' + data.headHash.substring(0, 7);
-    } else {
-        branchInfo.textContent = 'Branch: ' + (data.currentBranch || 'unknown');
-    }
-
-    // Build tag/branch maps
-    const branchMap = new Map();
-    const tagMap = new Map();
-    for (const b of data.branches) {
+    const branchInfo = data.isDetached
+        ? 'HEAD at ' + data.headHash.substring(0, 7)
+        : '&#9135; ' + (data.currentBranch || 'unknown');
+    document.getElementById('branch-info').innerHTML = branchInfo;
+    const bi2 = document.getElementById('branch-info-2');
+    if (bi2) bi2.innerHTML = branchInfo;
+    const branchMap = new Map(), tagMap = new Map();
+    (data.branches || []).forEach(b => {
         if (!branchMap.has(b.commitHash)) branchMap.set(b.commitHash, []);
         branchMap.get(b.commitHash).push(b);
-    }
-    for (const t of data.tags) {
+    });
+    (data.tags || []).forEach(t => {
         if (!tagMap.has(t.commitHash)) tagMap.set(t.commitHash, []);
         tagMap.get(t.commitHash).push(t);
-    }
-
-    const svgWidth = (data.totalLanes + 1) * LANE_WIDTH + GRAPH_LEFT_PAD * 2;
-
-    // Build commit index for parent lookups
-    const commitIndex = new Map();
-    data.commits.forEach((c, i) => commitIndex.set(c.hash, i));
-
-    for (let rowIdx = 0; rowIdx < data.commits.length; rowIdx++) {
-        const commit = data.commits[rowIdx];
+    });
+    const svgW = Math.max(60, (data.totalLanes + 1) * LANE_WIDTH + 20);
+    const cidx = new Map();
+    data.commits.forEach((c, i) => cidx.set(c.hash, i));
+    for (let ri = 0; ri < data.commits.length; ri++) {
+        const c = data.commits[ri];
         const tr = document.createElement('tr');
         tr.className = 'graph-row';
-        if (commit.isGuardianCommit) tr.classList.add('guardian-commit');
-        if (currentMode === 'guardian' && !commit.isGuardianCommit) tr.classList.add('dimmed');
-        tr.dataset.hash = commit.hash;
-        tr.onclick = () => selectCommit(commit.hash);
-
-        // SVG cell
-        const svgCell = document.createElement('td');
-        svgCell.className = 'graph-cell graph-cell-svg';
-        svgCell.innerHTML = buildSvgForRow(commit, rowIdx, data, commitIndex, svgWidth);
-        tr.appendChild(svgCell);
-
-        // Hash cell
-        const hashCell = document.createElement('td');
-        hashCell.className = 'graph-cell commit-hash';
-        hashCell.textContent = commit.abbreviatedHash;
-        tr.appendChild(hashCell);
-
-        // Message cell with ref badges
-        const msgCell = document.createElement('td');
-        msgCell.className = 'graph-cell commit-msg';
-        let msgHtml = escapeHtml(commit.message.length > 60 ? commit.message.substring(0, 57) + '...' : commit.message);
-
-        if (commit.isGuardianCommit) {
-            msgHtml += '<span class="guardian-badge">VG</span>';
-        }
-
-        // Branch badges
-        const branches = branchMap.get(commit.hash) || [];
-        for (const b of branches) {
-            const isHead = b.isCurrent;
-            const cls = isHead ? 'ref-badge head' : 'ref-badge branch';
-            const name = b.name.replace('remotes/origin/', '');
-            msgHtml += '<span class="' + cls + '">' + escapeHtml(name) + '</span>';
-        }
-
-        // Tag badges
-        const tags = tagMap.get(commit.hash) || [];
-        for (const t of tags) {
-            msgHtml += '<span class="ref-badge tag">' + escapeHtml(t.name) + '</span>';
-        }
-
-        msgCell.innerHTML = msgHtml;
-        tr.appendChild(msgCell);
-
-        // Author cell
-        const authorCell = document.createElement('td');
-        authorCell.className = 'graph-cell commit-author';
-        authorCell.textContent = commit.authorName;
-        tr.appendChild(authorCell);
-
-        // Date cell
-        const dateCell = document.createElement('td');
-        dateCell.className = 'graph-cell commit-date';
-        dateCell.textContent = getRelativeDate(commit.date);
-        tr.appendChild(dateCell);
-
+        if (c.isGuardianCommit) tr.classList.add('guardian-commit');
+        if (currentMode === 'guardian' && !c.isGuardianCommit) tr.classList.add('dimmed');
+        if (activeAuthor && c.authorName !== activeAuthor) tr.classList.add('author-dimmed');
+        tr.dataset.hash = c.hash;
+        tr.onclick = () => selectCommit(c.hash);
+        const sc = document.createElement('td');
+        sc.className = 'graph-cell graph-cell-svg';
+        sc.innerHTML = buildSvg(c, ri, data, cidx, svgW);
+        tr.appendChild(sc);
+        const hc = document.createElement('td');
+        hc.className = 'graph-cell commit-hash';
+        hc.textContent = c.abbreviatedHash;
+        tr.appendChild(hc);
+        const mc = document.createElement('td');
+        mc.className = 'graph-cell commit-msg';
+        let mh = escH(c.message.length > 72 ? c.message.substring(0, 69) + '...' : c.message);
+        if (c.isGuardianCommit) mh += '<span class="guardian-badge">VG</span>';
+        (branchMap.get(c.hash) || []).forEach(b => {
+            const cls = b.isCurrent ? 'ref-badge head' : b.isRemote ? 'ref-badge remote' : 'ref-badge branch';
+            mh += '<span class="' + cls + '">' + escH(b.name.replace(/^remotes\\/[^\\/]+\\//, '')) + '</span>';
+        });
+        (tagMap.get(c.hash) || []).forEach(t => {
+            mh += '<span class="ref-badge tag">' + escH(t.name) + '</span>';
+        });
+        mc.innerHTML = mh;
+        tr.appendChild(mc);
+        const ac = document.createElement('td');
+        ac.className = 'graph-cell commit-author';
+        ac.textContent = c.authorName;
+        tr.appendChild(ac);
+        const dc = document.createElement('td');
+        dc.className = 'graph-cell commit-date';
+        dc.textContent = relDate(c.date);
+        tr.appendChild(dc);
         tbody.appendChild(tr);
     }
 }
 
-function buildSvgForRow(commit, rowIdx, data, commitIndex, svgWidth) {
-    const cx = GRAPH_LEFT_PAD + commit.lane * LANE_WIDTH;
+function buildSvg(commit, ri, data, cidx, W) {
+    const cx = 10 + commit.lane * LANE_WIDTH;
     const cy = ROW_HEIGHT / 2;
-    let svg = '<svg width="' + svgWidth + '" height="' + ROW_HEIGHT + '">';
-
-    // Draw lines to parents
-    for (const parentHash of commit.parents) {
-        const parentIdx = commitIndex.get(parentHash);
-        if (parentIdx === undefined) continue;
-        const parent = data.commits[parentIdx];
-        const px = GRAPH_LEFT_PAD + parent.lane * LANE_WIDTH;
-        const rowsDown = parentIdx - rowIdx;
-
-        const color = LANE_COLORS[commit.lane % LANE_COLORS.length];
-
-        if (commit.lane === parent.lane) {
-            // Straight vertical line to next row (we just draw to bottom of current cell)
-            svg += '<line x1="' + cx + '" y1="' + cy + '" x2="' + cx + '" y2="' + ROW_HEIGHT + '" stroke="' + color + '" stroke-width="2"/>';
-        } else {
-            // Curved line for branch/merge
-            const mergeColor = LANE_COLORS[parent.lane % LANE_COLORS.length];
-            // Draw bezier from current node to bottom of cell towards parent lane
-            const endX = px;
-            svg += '<path d="M ' + cx + ' ' + cy + ' C ' + cx + ' ' + ROW_HEIGHT + ' ' + endX + ' 0 ' + endX + ' ' + ROW_HEIGHT + '" fill="none" stroke="' + mergeColor + '" stroke-width="2"/>';
-        }
-    }
-
-    // Draw continuation lines for lanes that pass through this row
-    // (simplified: draw straight lines for active lanes that are not this commit)
-    for (let prevIdx = 0; prevIdx < rowIdx; prevIdx++) {
-        const prevCommit = data.commits[prevIdx];
-        for (const parentHash of prevCommit.parents) {
-            const parentIdx = commitIndex.get(parentHash);
-            if (parentIdx === undefined || parentIdx <= rowIdx) continue;
-            const parent = data.commits[parentIdx];
-            // This parent extends past the current row
-            if (parentIdx > rowIdx) {
-                // Determine which lane to draw the pass-through
-                const lane = (prevCommit.lane === parent.lane)
-                    ? prevCommit.lane
-                    : parent.lane;
-                const lx = GRAPH_LEFT_PAD + lane * LANE_WIDTH;
-                const passColor = LANE_COLORS[lane % LANE_COLORS.length];
-                svg += '<line x1="' + lx + '" y1="0" x2="' + lx + '" y2="' + ROW_HEIGHT + '" stroke="' + passColor + '" stroke-width="2" opacity="0.4"/>';
+    let lines = '', nodes = '';
+    const passLanes = new Set();
+    for (let p = 0; p < ri; p++) {
+        const pc = data.commits[p];
+        for (const ph of pc.parents) {
+            const pi = cidx.get(ph);
+            if (pi !== undefined && pi > ri) {
+                const parent = data.commits[pi];
+                passLanes.add(pc.lane === parent.lane ? pc.lane : parent.lane);
             }
         }
     }
-
-    // Draw node circle
-    const nodeColor = LANE_COLORS[commit.lane % LANE_COLORS.length];
+    passLanes.delete(commit.lane);
+    passLanes.forEach(lane => {
+        const lx = 10 + lane * LANE_WIDTH;
+        const col = LANE_COLORS[lane % LANE_COLORS.length];
+        lines += '<line x1="' + lx + '" y1="0" x2="' + lx + '" y2="' + ROW_HEIGHT + '" stroke="' + col + '" stroke-width="1.5" opacity="0.45"/>';
+    });
+    for (let pi = 0; pi < commit.parents.length; pi++) {
+        const pHash = commit.parents[pi];
+        const pIdx = cidx.get(pHash);
+        if (pIdx === undefined) continue;
+        const parent = data.commits[pIdx];
+        const px = 10 + parent.lane * LANE_WIDTH;
+        const isMerge = pi > 0;
+        const col = LANE_COLORS[(isMerge ? parent.lane : commit.lane) % LANE_COLORS.length];
+        const sw = isMerge ? '1.5' : '2';
+        if (commit.lane === parent.lane) {
+            lines += '<line x1="' + cx + '" y1="' + cy + '" x2="' + cx + '" y2="' + ROW_HEIGHT + '" stroke="' + col + '" stroke-width="' + sw + '"/>';
+        } else {
+            const m = cy + (ROW_HEIGHT - cy) * 0.55;
+            lines += '<path d="M' + cx + ' ' + cy + ' C' + cx + ' ' + m + ' ' + px + ' ' + (ROW_HEIGHT - m) + ' ' + px + ' ' + ROW_HEIGHT + '" fill="none" stroke="' + col + '" stroke-width="' + sw + '"/>';
+        }
+    }
+    const ncol = LANE_COLORS[commit.lane % LANE_COLORS.length];
     const isHead = currentData && commit.hash === currentData.headHash;
-    const radius = isHead ? NODE_RADIUS + 2 : NODE_RADIUS;
-    svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + radius + '" fill="' + nodeColor + '" stroke="' + (isHead ? '#fff' : nodeColor) + '" stroke-width="' + (isHead ? 2 : 0) + '"/>';
-
-    svg += '</svg>';
-    return svg;
+    const isMergeC = commit.parents.length > 1;
+    const r = isHead ? NODE_RADIUS + 2 : (isMergeC ? NODE_RADIUS + 1 : NODE_RADIUS);
+    const fill = isMergeC ? 'var(--vscode-editor-background)' : ncol;
+    const stroke = isHead ? '#fff" stroke-width="2.5' : ncol + '" stroke-width="' + (isMergeC ? '2' : '1.5');
+    nodes += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + fill + '" stroke="' + stroke + '"/>';
+    return '<svg width="' + W + '" height="' + ROW_HEIGHT + '">' + lines + nodes + '</svg>';
 }
 
 function selectCommit(hash) {
-    // Deselect previous
-    const rows = document.querySelectorAll('.graph-row');
-    rows.forEach(r => r.classList.remove('selected'));
-
-    // Select new
+    document.querySelectorAll('.graph-row').forEach(r => r.classList.remove('selected'));
     const row = document.querySelector('[data-hash="' + hash + '"]');
     if (row) row.classList.add('selected');
-
     selectedHash = hash;
-    vscode.postMessage({ type: 'requestCommitDetail', hash: hash });
+    vscode.postMessage({ type: 'requestCommitDetail', hash });
 }
 
 function focusOnCommit(hash) {
     const row = document.querySelector('[data-hash="' + hash + '"]');
-    if (row) {
-        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        selectCommit(hash);
-    }
+    if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); selectCommit(hash); }
 }
 
-function renderCommitDetail(detail) {
-    const panel = document.getElementById('detail-panel');
-    const body = document.getElementById('detail-body');
-    const title = document.getElementById('detail-title');
-
-    title.textContent = 'Commit ' + detail.hash.substring(0, 8);
-
-    let html = '<div class="commit-info">';
-    html += '<strong>Author:</strong> ' + escapeHtml(detail.authorName) + ' &lt;' + escapeHtml(detail.authorEmail) + '&gt;<br>';
-    html += '<strong>Date:</strong> ' + new Date(detail.date).toLocaleString() + '<br>';
-    html += '<strong>Parents:</strong> ' + detail.parents.map(p => p.substring(0, 7)).join(', ');
-    html += '</div>';
-
-    html += '<div class="commit-full-msg">' + escapeHtml(detail.fullMessage) + '</div>';
-
-    if (detail.changedFiles.length > 0) {
-        html += '<strong>Changed Files (' + detail.changedFiles.length + '):</strong>';
-        html += '<ul class="file-list">';
-        for (const file of detail.changedFiles) {
-            const statusLetter = file.status[0].toUpperCase();
-            html += '<li onclick="event.stopPropagation()">';
-            html += '<span class="file-status ' + file.status + '">' + statusLetter + '</span>';
-            html += '<span>' + escapeHtml(file.path) + '</span>';
-            html += '<span class="file-stats">';
-            if (!file.binary) {
-                html += '<span class="additions">+' + file.insertions + '</span> ';
-                html += '<span class="deletions">-' + file.deletions + '</span>';
-            } else {
-                html += 'binary';
-            }
-            html += '</span>';
-            html += '<span class="file-actions">';
-            html += '<button onclick="requestFileDiff(\'' + escapeAttr(detail.hash) + '\', \'' + escapeAttr(file.path) + '\')">Diff</button>';
-            html += '<button onclick="openInVSCode(\'' + escapeAttr(file.path) + '\', \'' + escapeAttr(detail.hash) + '\')">Open</button>';
-            html += '</span>';
-            html += '</li>';
+function renderCommitDetail(d) {
+    document.getElementById('detail-title').textContent = 'Commit ' + d.hash.substring(0, 8);
+    let h = '<div class="commit-info">';
+    h += '<strong>Author:</strong> ' + escH(d.authorName) + ' &lt;' + escH(d.authorEmail) + '&gt;<br>';
+    h += '<strong>Date:</strong> ' + new Date(d.date).toLocaleString() + '<br>';
+    if (d.parents.length > 1) h += '<strong>Type:</strong> <span style="color:var(--vscode-editorWarning-foreground)">Merge commit</span><br>';
+    h += '<strong>Parents:</strong> ' + d.parents.map(p => p.substring(0, 7)).join(', ');
+    h += '</div>';
+    h += '<div class="commit-full-msg">' + escH(d.fullMessage) + '</div>';
+    if (d.changedFiles.length > 0) {
+        h += '<strong>Changed Files (' + d.changedFiles.length + '):</strong><ul class="file-list">';
+        for (const f of d.changedFiles) {
+            h += '<li onclick="event.stopPropagation()">';
+            h += '<span class="file-status ' + f.status + '">' + f.status[0].toUpperCase() + '</span>';
+            h += '<span>' + escH(f.path) + '</span>';
+            const stats = !f.binary
+                ? '<span class="additions">+' + f.insertions + '</span> <span class="deletions">-' + f.deletions + '</span>'
+                : 'binary';
+            h += '<span class="file-stats">' + stats + '</span>';
+            h += '<span class="file-actions">';
+            h += '<button onclick="reqDiff(\''+ea(d.hash)+'\',\''+ea(f.path)+'\')">Diff</button>';
+            h += '<button onclick="openVC(\''+ea(f.path)+'\',\''+ea(d.hash)+'\')">Open</button>';
+            h += '</span></li>';
         }
-        html += '</ul>';
+        h += '</ul>';
     }
-
-    html += '<div class="diff-preview" id="diff-preview"></div>';
-
-    body.innerHTML = html;
-    panel.classList.add('visible');
+    h += '<div class="diff-preview" id="diff-preview"></div>';
+    document.getElementById('detail-body').innerHTML = h;
+    document.getElementById('detail-panel').classList.add('visible');
 }
 
-function requestFileDiff(hash, filePath) {
-    vscode.postMessage({ type: 'requestFileDiff', hash: hash, filePath: filePath });
-}
-
-function openInVSCode(filePath, commitHash) {
-    vscode.postMessage({ type: 'showVSCodeDiff', filePath: filePath, commitHash: commitHash });
-}
+function reqDiff(h, f) { vscode.postMessage({ type: 'requestFileDiff', hash: h, filePath: f }); }
+function openVC(f, h)  { vscode.postMessage({ type: 'showVSCodeDiff', filePath: f, commitHash: h }); }
 
 function renderDiffPreview(data) {
-    const preview = document.getElementById('diff-preview');
-    if (!preview) return;
-
+    const p = document.getElementById('diff-preview');
+    if (!p) return;
     const lines = data.diff.split('\\n');
-    let html = '';
-    for (const line of lines) {
-        let cls = '';
-        if (line.startsWith('+') && !line.startsWith('+++')) cls = 'diff-line-add';
-        else if (line.startsWith('-') && !line.startsWith('---')) cls = 'diff-line-del';
-        else if (line.startsWith('@@')) cls = 'diff-line-hunk';
-        html += '<span class="' + cls + '">' + escapeHtml(line) + '</span>\\n';
+    let h = '';
+    for (const l of lines) {
+        let c = '';
+        if (l.startsWith('+') && !l.startsWith('+++')) c = 'diff-line-add';
+        else if (l.startsWith('-') && !l.startsWith('---')) c = 'diff-line-del';
+        else if (l.startsWith('@@')) c = 'diff-line-hunk';
+        h += '<span class="' + c + '">' + escH(l) + '</span>\\n';
     }
-    preview.innerHTML = html;
-    preview.classList.add('visible');
+    p.innerHTML = h;
+    p.classList.add('visible');
 }
 
 function closeDetail() {
     document.getElementById('detail-panel').classList.remove('visible');
-    const rows = document.querySelectorAll('.graph-row');
-    rows.forEach(r => r.classList.remove('selected'));
+    document.querySelectorAll('.graph-row').forEach(r => r.classList.remove('selected'));
     selectedHash = null;
 }
 
-function getRelativeDate(dateStr) {
-    const now = Date.now();
-    const date = new Date(dateStr).getTime();
-    const diff = now - date;
-    const sec = Math.floor(diff / 1000);
-    const min = Math.floor(sec / 60);
-    const hr = Math.floor(min / 60);
-    const day = Math.floor(hr / 24);
-    if (sec < 60) return 'just now';
-    if (min < 60) return min + 'm ago';
-    if (hr < 24) return hr + 'h ago';
+function loadBranches() {
+    document.getElementById('branch-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
+    vscode.postMessage({ type: 'requestBranchDetails' });
+}
+function toggleCreateBranchForm() {
+    const f = document.getElementById('create-branch-form');
+    f.style.display = f.style.display === 'none' ? '' : 'none';
+    if (f.style.display !== 'none') document.getElementById('new-branch-name').focus();
+}
+function doCreateBranch() {
+    const n = document.getElementById('new-branch-name').value.trim();
+    if (!n) return;
+    vscode.postMessage({ type: 'createBranch', name: n });
+    document.getElementById('new-branch-name').value = '';
+    toggleCreateBranchForm();
+}
+function doCheckout(n)        { vscode.postMessage({ type: 'checkoutBranch', name: n }); }
+function doDeleteBranch(n, f) { vscode.postMessage({ type: 'deleteBranch', name: n, force: !!f }); }
+function doMerge(n, s)        { vscode.postMessage({ type: 'mergeBranch', name: n, strategy: s || 'no-ff' }); }
+function doRebaseOnto(n)      { vscode.postMessage({ type: 'rebaseBranch', name: n }); }
+
+function renderBranchList(branches) {
+    const el = document.getElementById('branch-list-content');
+    if (!branches || !branches.length) {
+        el.innerHTML = '<div style="padding:6px;color:var(--vscode-descriptionForeground)">No branches found.</div>';
+        return;
+    }
+    const local  = branches.filter(b => !b.isRemote);
+    const remote = branches.filter(b => b.isRemote);
+    let h = '';
+    if (local.length) {
+        h += '<div class="section-title">LOCAL BRANCHES</div>';
+        for (const b of local) {
+            h += '<div class="branch-item' + (b.isCurrent ? ' current' : '') + '">';
+            h += '<span class="branch-name">' + (b.isCurrent ? '&#10003; ' : '&nbsp;&nbsp;') + escH(b.name) + '</span>';
+            if (b.tracking) h += '<span class="branch-tracking">' + escH(b.tracking) + '</span>';
+            if (b.ahead || b.behind) {
+                h += '<span class="ahead-behind">';
+                if (b.ahead)  h += '<span class="ahead">&#8593;' + b.ahead + '</span>';
+                if (b.behind) h += '<span class="behind">&#8595;' + b.behind + '</span>';
+                h += '</span>';
+            }
+            h += '<span class="item-actions">';
+            if (!b.isCurrent) {
+                h += '<button onclick="doCheckout(\''+ea(b.name)+'\')">Checkout</button>';
+                h += '<button onclick="doMerge(\''+ea(b.name)+'\',\'no-ff\')">Merge</button>';
+                h += '<button onclick="doRebaseOnto(\''+ea(b.name)+'\')">Rebase onto</button>';
+                h += '<button class="danger" onclick="doDeleteBranch(\''+ea(b.name)+'\',false)">Delete</button>';
+            }
+            h += '</span></div>';
+        }
+    }
+    if (remote.length) {
+        h += '<div class="section-title" style="margin-top:8px">REMOTE BRANCHES</div>';
+        for (const b of remote) {
+            h += '<div class="branch-item">';
+            h += '<span class="branch-name" style="color:var(--vscode-descriptionForeground)">' + escH(b.name) + '</span>';
+            h += '<span class="item-actions"><button onclick="doCheckout(\''+ea(b.name)+'\')">Checkout</button></span>';
+            h += '</div>';
+        }
+    }
+    el.innerHTML = h;
+}
+
+function loadContributors() {
+    document.getElementById('contributor-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
+    vscode.postMessage({ type: 'requestContributors' });
+}
+function renderContributorList(contribs) {
+    const el = document.getElementById('contributor-list-content');
+    if (!contribs || !contribs.length) {
+        el.innerHTML = '<div style="padding:6px;color:var(--vscode-descriptionForeground)">No contributors found.</div>';
+        return;
+    }
+    const maxC = Math.max(...contribs.map(c => c.commitCount), 1);
+    let h = '<div class="section-title">CONTRIBUTORS (' + contribs.length + ')</div>';
+    h += '<div style="font-size:10px;color:var(--vscode-descriptionForeground);padding:2px 6px 4px">Click to filter graph by author</div>';
+    for (const c of contribs) {
+        const pct = Math.round((c.commitCount / maxC) * 100);
+        const isA = activeAuthor === c.name;
+        h += '<div class="contributor-item" onclick="filterByAuthor(\''+ea(c.name)+'\')" style="' + (isA ? 'background:var(--vscode-list-activeSelectionBackground);' : '') + 'cursor:pointer">';
+        h += '<span style="flex:0 0 auto;font-size:12px;margin-right:4px">' + escH(c.name) + '</span>';
+        h += '<div class="contributor-bar-wrap"><div class="contributor-bar" style="width:' + pct + '%"></div></div>';
+        h += '<span class="contributor-count">' + c.commitCount + '</span>';
+        h += '</div>';
+    }
+    el.innerHTML = h;
+}
+
+function loadStashes() {
+    document.getElementById('stash-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
+    vscode.postMessage({ type: 'requestStashes' });
+}
+function doCreateStash() {
+    const msg = prompt('Stash message (optional):');
+    if (msg === null) return;
+    vscode.postMessage({ type: 'createStash', message: msg || undefined });
+}
+function renderStashList(stashes) {
+    const el = document.getElementById('stash-list-content');
+    if (!stashes || !stashes.length) {
+        el.innerHTML = '<div style="padding:6px;color:var(--vscode-descriptionForeground)">No stashes.</div>';
+        return;
+    }
+    let h = '<div class="section-title">STASHES (' + stashes.length + ')</div>';
+    for (const s of stashes) {
+        h += '<div class="stash-item">';
+        h += '<span style="flex:1;overflow:hidden">';
+        h += '<span style="color:var(--vscode-textLink-foreground)">' + escH(s.ref) + '</span> ' + escH(s.message);
+        h += '<br><span style="font-size:10px;color:var(--vscode-descriptionForeground)">' + escH(s.authorName) + ' &middot; ' + relDate(s.date) + (s.branch ? ' &middot; on ' + escH(s.branch) : '') + '</span>';
+        h += '</span><span class="item-actions">';
+        h += '<button onclick="vscode.postMessage({type:\'applyStash\',index:' + s.index + '})">Apply</button>';
+        h += '<button onclick="vscode.postMessage({type:\'popStash\',index:'   + s.index + '})">Pop</button>';
+        h += '<button class="danger" onclick="vscode.postMessage({type:\'dropStash\',index:' + s.index + '})">Drop</button>';
+        h += '</span></div>';
+    }
+    el.innerHTML = h;
+}
+
+function loadRemotes() {
+    document.getElementById('remote-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
+    vscode.postMessage({ type: 'requestRemotes' });
+}
+function doFetchAll() { vscode.postMessage({ type: 'fetchRemote', remote: '--all' }); }
+function renderRemoteList(remotes) {
+    const el = document.getElementById('remote-list-content');
+    if (!remotes || !remotes.length) {
+        el.innerHTML = '<div style="padding:6px;color:var(--vscode-descriptionForeground)">No remotes configured.</div>';
+        return;
+    }
+    let h = '<div class="section-title">REMOTES</div>';
+    for (const r of remotes) {
+        h += '<div class="remote-item">';
+        h += '<span style="flex:1;overflow:hidden"><strong>' + escH(r.name) + '</strong><br>';
+        h += '<span style="font-size:10px;color:var(--vscode-descriptionForeground)">' + escH(r.fetchUrl) + '</span></span>';
+        h += '<span class="item-actions">';
+        h += '<button onclick="vscode.postMessage({type:\'fetchRemote\',remote:\''+ea(r.name)+'\'})">Fetch</button>';
+        h += '<button onclick="vscode.postMessage({type:\'pullBranch\',remote:\''+ea(r.name)+'\',branch:\'\',rebase:false})">Pull</button>';
+        h += '<button onclick="vscode.postMessage({type:\'pushBranch\',remote:\''+ea(r.name)+'\',branch:\'\',force:false})">Push</button>';
+        h += '</span></div>';
+    }
+    el.innerHTML = h;
+}
+
+function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.className = 'toast ' + type + ' show';
+    setTimeout(() => t.classList.remove('show'), 3500);
+}
+function relDate(ds) {
+    if (!ds) return '';
+    const d = Date.now() - new Date(ds).getTime();
+    const s = Math.floor(d/1000), m = Math.floor(s/60), h = Math.floor(m/60), day = Math.floor(h/24);
+    if (s < 60)  return 'just now';
+    if (m < 60)  return m + 'm ago';
+    if (h < 24)  return h + 'h ago';
     if (day < 30) return day + 'd ago';
-    return new Date(dateStr).toLocaleDateString();
+    return new Date(ds).toLocaleDateString();
 }
-
-function escapeHtml(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function escH(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
-function escapeAttr(str) {
-    return str.replace(/'/g, "\\\\'").replace(/"/g, '&quot;');
-}
+function ea(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 </script>
 </body>
 </html>`;
     }
+
 
     public dispose(): void {
         if (this.panel) {

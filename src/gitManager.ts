@@ -1734,6 +1734,359 @@ public/bundles/
         }
     }
 
+    // ============================================
+    // Multi-user / Multi-branch / Advanced Git Operations
+    // ============================================
+
+    /**
+     * Get all contributors (unique authors) with commit statistics
+     */
+    public async getContributors(): Promise<Array<{
+        name: string;
+        email: string;
+        commitCount: number;
+        firstCommitDate: string;
+        lastCommitDate: string;
+    }>> {
+        if (!this.git) { return []; }
+        try {
+            // Use git log with shortlog format
+            const raw = await this.git.raw([
+                'log', '--all', '--format=%an\t%ae\t%aI'
+            ]);
+            if (!raw.trim()) { return []; }
+
+            const authorMap = new Map<string, {
+                name: string;
+                email: string;
+                commitCount: number;
+                dates: string[];
+            }>();
+
+            for (const line of raw.trim().split('\n')) {
+                if (!line.trim()) { continue; }
+                const parts = line.split('\t');
+                if (parts.length < 3) { continue; }
+                const name = parts[0].trim();
+                const email = parts[1].trim();
+                const date = parts[2].trim();
+                const key = email.toLowerCase();
+                if (!authorMap.has(key)) {
+                    authorMap.set(key, { name, email, commitCount: 0, dates: [] });
+                }
+                const entry = authorMap.get(key)!;
+                entry.commitCount++;
+                entry.dates.push(date);
+            }
+
+            return Array.from(authorMap.values()).map(a => ({
+                name: a.name,
+                email: a.email,
+                commitCount: a.commitCount,
+                firstCommitDate: a.dates[a.dates.length - 1] || '',
+                lastCommitDate: a.dates[0] || ''
+            })).sort((a, b) => b.commitCount - a.commitCount);
+        } catch (error) {
+            console.error('Failed to get contributors:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get stash list
+     */
+    public async getStashList(): Promise<Array<{
+        index: number;
+        ref: string;
+        branch: string;
+        message: string;
+        authorName: string;
+        date: string;
+    }>> {
+        if (!this.git) { return []; }
+        try {
+            const raw = await this.git.raw([
+                'stash', 'list', '--format=%gd\t%an\t%aI\t%gs'
+            ]);
+            if (!raw.trim()) { return []; }
+
+            return raw.trim().split('\n').map((line, index) => {
+                const parts = line.split('\t');
+                const ref = parts[0] || `stash@{${index}}`;
+                const authorName = parts[1] || '';
+                const date = parts[2] || '';
+                const gs = parts[3] || '';
+                // gs format: "WIP on <branch>: <hash> <message>" or "On <branch>: <message>"
+                const branchMatch = gs.match(/^(?:WIP on|On)\s+([^:]+):/);
+                const branch = branchMatch ? branchMatch[1] : '';
+                const message = gs;
+                return { index, ref, branch, message, authorName, date };
+            });
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Apply a stash by index
+     */
+    public async applyStash(index: number): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            await this.git.raw(['stash', 'apply', `stash@{${index}}`]);
+            return { success: true, message: `Applied stash@{${index}}` };
+        } catch (error) {
+            return { success: false, message: `Apply stash failed: ${error}` };
+        }
+    }
+
+    /**
+     * Pop a stash by index
+     */
+    public async popStash(index: number): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            await this.git.raw(['stash', 'pop', `stash@{${index}}`]);
+            return { success: true, message: `Popped stash@{${index}}` };
+        } catch (error) {
+            return { success: false, message: `Pop stash failed: ${error}` };
+        }
+    }
+
+    /**
+     * Drop a stash by index
+     */
+    public async dropStash(index: number): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            await this.git.raw(['stash', 'drop', `stash@{${index}}`]);
+            return { success: true, message: `Dropped stash@{${index}}` };
+        } catch (error) {
+            return { success: false, message: `Drop stash failed: ${error}` };
+        }
+    }
+
+    /**
+     * Create a stash with optional message
+     */
+    public async createStash(message?: string): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            if (message) {
+                await this.git.stash(['push', '-m', message]);
+            } else {
+                await this.git.stash(['push']);
+            }
+            return { success: true, message: 'Stash created' };
+        } catch (error) {
+            return { success: false, message: `Create stash failed: ${error}` };
+        }
+    }
+
+    /**
+     * Get list of remotes with URLs
+     */
+    public async getRemoteList(): Promise<Array<{
+        name: string;
+        fetchUrl: string;
+        pushUrl: string;
+    }>> {
+        if (!this.git) { return []; }
+        try {
+            const remotes = await this.git.getRemotes(true);
+            return remotes.map(r => ({
+                name: r.name,
+                fetchUrl: r.refs.fetch || '',
+                pushUrl: r.refs.push || ''
+            }));
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Fetch from a remote (or all remotes)
+     */
+    public async fetchRemote(remote: string = '--all'): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            if (remote === '--all') {
+                await this.git.fetch(['--all', '--prune']);
+            } else {
+                await this.git.fetch([remote, '--prune']);
+            }
+            return { success: true, message: `Fetched from ${remote}` };
+        } catch (error) {
+            return { success: false, message: `Fetch failed: ${error}` };
+        }
+    }
+
+    /**
+     * Pull a branch from remote
+     */
+    public async pullBranch(
+        remote: string = 'origin',
+        branch?: string,
+        rebase: boolean = false
+    ): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            const options = rebase ? ['--rebase'] : [];
+            if (branch) {
+                await this.git.pull(remote, branch, options);
+            } else {
+                await this.git.pull(remote, undefined, options);
+            }
+            return { success: true, message: `Pulled from ${remote}${branch ? `/${branch}` : ''}` };
+        } catch (error) {
+            return { success: false, message: `Pull failed: ${error}` };
+        }
+    }
+
+    /**
+     * Merge a branch into current branch
+     */
+    public async mergeBranch(
+        branch: string,
+        strategy: 'ff' | 'no-ff' | 'squash' = 'no-ff'
+    ): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            const args = ['merge'];
+            if (strategy === 'no-ff') { args.push('--no-ff'); }
+            if (strategy === 'squash') { args.push('--squash'); }
+            args.push(branch);
+            await this.git.raw(args);
+            return { success: true, message: `Merged '${branch}' (${strategy})` };
+        } catch (error) {
+            return { success: false, message: `Merge failed: ${error}` };
+        }
+    }
+
+    /**
+     * Rebase current branch onto another
+     */
+    public async rebaseBranch(baseBranch: string): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            await this.git.rebase([baseBranch]);
+            return { success: true, message: `Rebased onto '${baseBranch}'` };
+        } catch (error) {
+            return { success: false, message: `Rebase failed: ${error}` };
+        }
+    }
+
+    /**
+     * Delete a branch
+     */
+    public async deleteBranch(
+        branch: string,
+        force: boolean = false
+    ): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            const args = force ? ['-D', branch] : ['-d', branch];
+            await this.git.branch(args);
+            return { success: true, message: `Deleted branch '${branch}'` };
+        } catch (error) {
+            return { success: false, message: `Delete branch failed: ${error}` };
+        }
+    }
+
+    /**
+     * Rename a branch
+     */
+    public async renameBranch(oldName: string, newName: string): Promise<{ success: boolean; message: string }> {
+        if (!this.git) { return { success: false, message: 'Git not initialized' }; }
+        try {
+            await this.git.branch(['-m', oldName, newName]);
+            return { success: true, message: `Renamed '${oldName}' to '${newName}'` };
+        } catch (error) {
+            return { success: false, message: `Rename branch failed: ${error}` };
+        }
+    }
+
+    /**
+     * Push a branch to remote
+     */
+    public async pushBranch(
+        remote: string,
+        branch: string,
+        force: boolean = false
+    ): Promise<{ success: boolean; message: string }> {
+        const result = await this.pushToRemote(remote, branch, force);
+        return result;
+    }
+
+    /**
+     * Get branches with tracking info (ahead/behind counts)
+     */
+    public async getBranchDetails(): Promise<Array<{
+        name: string;
+        isCurrent: boolean;
+        commitHash: string;
+        isRemote: boolean;
+        ahead: number;
+        behind: number;
+        tracking?: string;
+    }>> {
+        if (!this.git) { return []; }
+        try {
+            const raw = await this.git.raw([
+                'branch', '-vv', '--all', '--no-abbrev'
+            ]);
+            if (!raw.trim()) { return []; }
+
+            const results: Array<{
+                name: string;
+                isCurrent: boolean;
+                commitHash: string;
+                isRemote: boolean;
+                ahead: number;
+                behind: number;
+                tracking?: string;
+            }> = [];
+
+            for (const line of raw.trim().split('\n')) {
+                if (!line.trim()) { continue; }
+                const isCurrent = line.startsWith('* ');
+                const stripped = line.replace(/^\*?\s+/, '');
+                // Format: name hash [tracking: ahead X, behind Y] message
+                const parts = stripped.split(/\s+/);
+                const name = parts[0];
+                const hash = parts[1] || '';
+                const isRemote = name.startsWith('remotes/');
+
+                // Parse ahead/behind from bracket info
+                const bracketMatch = line.match(/\[([^\]]+)\]/);
+                let tracking: string | undefined;
+                let ahead = 0;
+                let behind = 0;
+                if (bracketMatch) {
+                    const info = bracketMatch[1];
+                    const trackMatch = info.match(/^([^:]+)/);
+                    if (trackMatch) { tracking = trackMatch[1].trim(); }
+                    const aheadMatch = info.match(/ahead (\d+)/);
+                    const behindMatch = info.match(/behind (\d+)/);
+                    if (aheadMatch) { ahead = parseInt(aheadMatch[1], 10); }
+                    if (behindMatch) { behind = parseInt(behindMatch[1], 10); }
+                }
+
+                results.push({ name, isCurrent, commitHash: hash, isRemote, ahead, behind, tracking });
+            }
+
+            return results;
+        } catch {
+            // Fall back to simple branch list
+            return this.getAllBranches().then(branches => branches.map(b => ({
+                ...b,
+                ahead: 0,
+                behind: 0,
+                tracking: undefined
+            })));
+        }
+    }
+
     public dispose(): void {
         // Cleanup if needed
     }

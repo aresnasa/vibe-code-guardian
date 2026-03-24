@@ -351,23 +351,96 @@ export interface CommitDetail {
     changedFiles: CommitFileChange[];
 }
 
+// ============================================
+// Git User / Branch / Stash / Remote Types
+// ============================================
+
+/** A git contributor with aggregated commit statistics */
+export interface GitContributor {
+    name: string;
+    email: string;
+    commitCount: number;
+    /** ISO timestamp of first commit by this author */
+    firstCommitDate: string;
+    /** ISO timestamp of most recent commit by this author */
+    lastCommitDate: string;
+}
+
+/** A git stash entry */
+export interface GitStash {
+    /** Stash index (0 = most recent) */
+    index: number;
+    /** Full stash ref, e.g. "stash@{0}" */
+    ref: string;
+    /** Branch name when stash was created */
+    branch: string;
+    /** Stash message */
+    message: string;
+    /** Author name */
+    authorName: string;
+    /** ISO timestamp */
+    date: string;
+}
+
+/** A git remote with fetch/push URLs */
+export interface GitRemote {
+    name: string;
+    fetchUrl: string;
+    pushUrl: string;
+}
+
+/** Branch with tracking information */
+export interface GitBranchDetail {
+    name: string;
+    isCurrent: boolean;
+    commitHash: string;
+    isRemote: boolean;
+    /** How many commits ahead of its remote tracking branch */
+    ahead: number;
+    /** How many commits behind its remote tracking branch */
+    behind: number;
+    /** Remote tracking branch, e.g. "origin/main" */
+    tracking?: string;
+}
+
 /** Messages from Extension to WebView */
 export type ExtensionToWebviewMessage =
     | { type: 'graphData'; data: GitGraphData }
     | { type: 'commitDetail'; data: CommitDetail }
     | { type: 'diffContent'; data: { filePath: string; diff: string } }
     | { type: 'loading'; loading: boolean }
-    | { type: 'error'; message: string };
+    | { type: 'error'; message: string }
+    | { type: 'stashList'; data: GitStash[] }
+    | { type: 'contributors'; data: GitContributor[] }
+    | { type: 'remotes'; data: GitRemote[] }
+    | { type: 'branchDetails'; data: GitBranchDetail[] }
+    | { type: 'operationResult'; success: boolean; message: string; operation: string };
 
 /** Messages from WebView to Extension */
 export type WebviewToExtensionMessage =
-    | { type: 'requestGraphData'; mode: 'guardian' | 'full'; maxCount: number }
+    | { type: 'requestGraphData'; mode: 'guardian' | 'full'; maxCount: number; authorFilter?: string }
     | { type: 'requestCommitDetail'; hash: string }
     | { type: 'requestFileDiff'; hash: string; filePath: string }
     | { type: 'openFile'; filePath: string; commitHash: string }
     | { type: 'showVSCodeDiff'; filePath: string; commitHash: string }
     | { type: 'rollbackToCommit'; hash: string }
-    | { type: 'ready' };
+    | { type: 'ready' }
+    | { type: 'requestStashes' }
+    | { type: 'requestContributors' }
+    | { type: 'requestRemotes' }
+    | { type: 'requestBranchDetails' }
+    | { type: 'createBranch'; name: string; from?: string }
+    | { type: 'checkoutBranch'; name: string }
+    | { type: 'deleteBranch'; name: string; force: boolean }
+    | { type: 'mergeBranch'; name: string; strategy: 'ff' | 'no-ff' | 'squash' }
+    | { type: 'rebaseBranch'; name: string }
+    | { type: 'applyStash'; index: number }
+    | { type: 'popStash'; index: number }
+    | { type: 'dropStash'; index: number }
+    | { type: 'createStash'; message?: string }
+    | { type: 'fetchRemote'; remote: string }
+    | { type: 'pullBranch'; remote: string; branch: string; rebase: boolean }
+    | { type: 'pushBranch'; remote: string; branch: string; force: boolean };
 
 export const DEFAULT_SETTINGS: GuardianSettings = {
     autoCheckpointOnAI: true,
