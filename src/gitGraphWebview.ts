@@ -931,6 +931,25 @@ function renderGraph(data) {
         if (!tagMap.has(t.commitHash)) tagMap.set(t.commitHash, []);
         tagMap.get(t.commitHash).push(t);
     });
+    if (!data.commits || data.commits.length === 0) {
+        const emptyRow = document.createElement('tr');
+        const emptyCell = document.createElement('td');
+        emptyCell.colSpan = 5;
+        emptyCell.style.cssText = 'padding:24px 16px;color:var(--vscode-descriptionForeground);text-align:center;';
+        if (data.mode === 'guardian') {
+            emptyCell.innerHTML =
+                '<div style="font-size:13px;margin-bottom:8px;">No Vibe Guardian checkpoints found</div>' +
+                '<div style="font-size:11px;">This repository has no commits created by Vibe Code Guardian.</div>' +
+                '<div style="font-size:11px;margin-top:6px;">Click <strong>Full History</strong> to browse all commits, or start making checkpoints to see them here.</div>';
+        } else {
+            emptyCell.innerHTML =
+                '<div style="font-size:13px;margin-bottom:8px;">No commits found</div>' +
+                '<div style="font-size:11px;">This repository has no git history yet.</div>';
+        }
+        emptyRow.appendChild(emptyCell);
+        tbody.appendChild(emptyRow);
+        return;
+    }
     const svgW = Math.max(60, (data.totalLanes + 1) * LANE_WIDTH + 20);
     const cidx = new Map();
     data.commits.forEach((c, i) => cidx.set(c.hash, i));

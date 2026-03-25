@@ -1394,7 +1394,9 @@ public/bundles/
             return [];
         }
         try {
-            const log = await this.git.log({ maxCount, '--grep': '[Vibe Guardian]' });
+            // --fixed-strings prevents git from interpreting [Vibe Guardian] as a
+            // regex character-class (which would match almost any commit message).
+            const log = await this.git.log({ maxCount, '--grep': '[Vibe Guardian]', '--fixed-strings': null });
             return log.all.map(commit => ({
                 hash: commit.hash,
                 date: commit.date,
@@ -1608,7 +1610,10 @@ public/bundles/
             ];
 
             if (guardianOnly) {
-                args.push('--grep=[Vibe Guardian]');
+                // Use --fixed-strings so git treats the pattern as a literal string,
+                // not an ERE regex where [Vibe Guardian] would be a char-class matching
+                // nearly every commit message.
+                args.push('--fixed-strings', '--grep=[Vibe Guardian]');
             }
 
             const raw = await this.git.raw(args);
@@ -2087,7 +2092,98 @@ public/bundles/
         }
     }
 
+    /**
+     * Get git blame information for a file.
+     * Returns per-line blame data: hash, author, date, summary.
+     */
+    public async getBlame(filePath: string): Promise<BlameInfo[]> {
+        if (!this.git) { return []; }
+        try {
+            // --porcelain gives machine-readable output
+            const raw = await this.git.raw([
+                'blame', '--porcelain', '--', filePath
+            ]);
+            if (!raw.trim()) { return []; }
+            return this.parseBlame(raw);
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Parse raw `git blame --porcelain` output into BlameInfo array.
+     * Each record starts with "<40-char hash> <orig> <final> <count>" line
+     * followed by header key-value lines, then a tab-prefixed source line.
+     */
+    private parseBlame(raw: string): BlameInfo[] {
+        const lines = raw.split('\n');
+        const commits = new Map<string, Partial<BlameInfo>>();
+        const result: BlameInfo[] = [];
+        let currentHash = '';
+        let currentLine = 0;
+
+        for (const line of lines) {
+            // Header line: "<hash> <origLine> <finalLine> [groupCount]"
+            const headerMatch = line.match(/^([0-9a-f]{40}) \d+ (\d+)/);
+            if (headerMatch) {
+                currentHash = headerMatch[1];
+                currentLine = parseInt(headerMatch[2], 10);
+                if (!commits.has(currentHash)) {
+                    commits.set(currentHash, { hash: currentHash });
+                }
+                continue;
+            }
+            // Source line (tab prefix)
+            if (line.startsWith('\t')) {
+                const c = commits.get(currentHash);
+                if (c) {
+                    result.push({
+                        lineNumber: currentLine,
+                        hash: c.hash ?? currentHash,
+                        shortHash: (c.hash ?? currentHash).substring(0, 7),
+                        authorName: c.authorName ?? 'Unknown',
+                        authorEmail: c.authorEmail ?? '',
+                        date: c.date ?? '',
+                        summary: c.summary ?? '',
+                        isUncommitted: (c.hash ?? '').startsWith('0000000')
+                    });
+                }
+                continue;
+            }
+            // Key-value lines
+            const c = commits.get(currentHash);
+            if (!c) { continue; }
+            if (line.startsWith('author ')) {
+                c.authorName = line.slice('author '.length);
+            } else if (line.startsWith('author-mail ')) {
+                c.authorEmail = line.slice('author-mail '.length).replace(/[<>]/g, '');
+            } else if (line.startsWith('author-time ')) {
+                // Unix timestamp → ISO string
+                const ts = parseInt(line.slice('author-time '.length), 10);
+                c.date = new Date(ts * 1000).toISOString();
+            } else if (line.startsWith('summary ')) {
+                c.summary = line.slice('summary '.length);
+            }
+        }
+        return result;
+    }
+
     public dispose(): void {
         // Cleanup if needed
     }
+}
+
+/**
+ * Represents a single line's blame information.
+ */
+export interface BlameInfo {
+    lineNumber: number;
+    hash: string;
+    shortHash: string;
+    authorName: string;
+    authorEmail: string;
+    /** ISO 8601 date string */
+    date: string;
+    summary: string;
+    isUncommitted: boolean;
 }

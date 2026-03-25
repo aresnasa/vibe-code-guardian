@@ -14,6 +14,7 @@ import { CheckpointType, CheckpointSource, ChangedFile, FileChangeType, CommitLa
 import { getLanguageDisplayName, getNextLanguage, getNotificationLevelDisplayName, getNextNotificationLevel, getPushStrategyDisplayName, getNextPushStrategy, getTrackingModeDisplayName, getNextTrackingMode } from './languageConfig';
 import { GitGraphTreeProvider, GitGraphTreeItem } from './gitGraphTreeProvider';
 import { GitGraphWebviewManager } from './gitGraphWebview';
+import { BlameDecorator } from './blameDecorator';
 
 /**
  * Smart Notification Manager
@@ -175,6 +176,7 @@ let treeProvider: TimelineTreeProvider;
 let stateMonitor: StateMonitor;
 let gitGraphTreeProvider: GitGraphTreeProvider;
 let gitGraphWebview: GitGraphWebviewManager;
+let blameDecorator: BlameDecorator;
 let guardianMainStatusBarItem: vscode.StatusBarItem;
 let guardianInfoStatusBarItem: vscode.StatusBarItem;
 
@@ -321,6 +323,10 @@ export async function activate(context: vscode.ExtensionContext) {
         // Create Git Graph WebView Manager
         gitGraphWebview = new GitGraphWebviewManager(context, gitManager);
         context.subscriptions.push({ dispose: () => gitGraphWebview.dispose() });
+
+        // Initialize inline blame decorator (GitLens-style current-line annotations)
+        blameDecorator = new BlameDecorator(gitManager);
+        context.subscriptions.push(blameDecorator);
 
         // Register DiffContentProvider for diff view
         const diffProvider = new DiffContentProvider();
@@ -1805,6 +1811,19 @@ function registerCommands(context: vscode.ExtensionContext) {
             await gitGraphWebview.show(undefined, 'remotes');
         })
     );
+
+    // ── Inline Blame (GitLens-style current-line annotation) ─────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.toggleBlame', () => {
+            const enabled = !blameDecorator.isEnabled();
+            blameDecorator.setEnabled(enabled);
+            const icon = enabled ? '$(eye)' : '$(eye-closed)';
+            vscode.window.showInformationMessage(
+                `${icon} Git Blame ${enabled ? 'enabled' : 'disabled'}`
+            );
+            updateGuardianInfoStatusBar();
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
@@ -1889,6 +1908,7 @@ function setupEventListeners(context: vscode.ExtensionContext) {
     checkpointManager.onCheckpointCreated(() => {
         treeProvider.refresh();
         gitGraphTreeProvider.refresh();
+        blameDecorator?.invalidateCache();
     });
     checkpointManager.onCheckpointDeleted(() => {
         treeProvider.refresh();
@@ -2007,6 +2027,7 @@ function showGuardianPanel() {
     const pushLabel = getPushStrategyDisplayName(settings.pushStrategy);
     const langLabel = getLanguageDisplayName(settings.commitLanguage);
     const milestoneToggleLabel = settings.milestoneEnabled ? '✅ 已启用' : '⭕ 已禁用';
+    const blameLabel = blameDecorator?.isEnabled() ? '✅ 已启用' : '⭕ 已禁用';
 
     const items: GuardianItem[] = [
         // ── 分组管理 ──────────────────────────────────
@@ -2037,6 +2058,12 @@ function showGuardianPanel() {
             label: '$(git-branch) 打开 Git 图',
             description: '守护者提交图谱',
             action: 'showGitGraph'
+        },
+        {
+            label: '$(eye) 内联 Blame 注释',
+            description: blameLabel,
+            detail: 'GitLens 风格：光标行显示提交人/时间/摘要',
+            action: 'toggleBlame'
         },
         {
             label: '$(history) 管理里程碑',
@@ -2115,6 +2142,9 @@ function showGuardianPanel() {
                 break;
             case 'toggleMilestone':
                 vscode.commands.executeCommand('vibeCodeGuardian.toggleMilestone');
+                break;
+            case 'toggleBlame':
+                vscode.commands.executeCommand('vibeCodeGuardian.toggleBlame');
                 break;
         }
     });

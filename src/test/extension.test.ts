@@ -971,3 +971,302 @@ suite('GitManager — multi-user / multi-branch operations', () => {
 	});
 });
 
+// ══════════════════════════════════════════════════════════════════
+// GitManager — getGraphCommits unit tests
+// ══════════════════════════════════════════════════════════════════
+suite('GitManager — getGraphCommits', () => {
+	const SEP = '<<GG_SEP>>';
+	const REC = '<<GG_REC>>';
+
+	function makeGitManager(fakeGit: object): GitManager {
+		const mgr = new GitManager();
+		(mgr as any).git = fakeGit;
+		return mgr;
+	}
+
+	test('getGraphCommits: returns empty array when git is not initialized', async () => {
+		const mgr = new GitManager();
+		(mgr as any).git = null;
+		assert.deepStrictEqual(await mgr.getGraphCommits(), []);
+	});
+
+	test('getGraphCommits: returns empty array when git returns empty output', async () => {
+		const fakeGit = { raw: async () => '   ' };
+		assert.deepStrictEqual(await makeGitManager(fakeGit).getGraphCommits(), []);
+	});
+
+	test('getGraphCommits: returns empty array when git throws', async () => {
+		const fakeGit = { raw: async () => { throw new Error('git error'); } };
+		assert.deepStrictEqual(await makeGitManager(fakeGit).getGraphCommits(), []);
+	});
+
+	test('getGraphCommits: full mode does NOT include --grep or --fixed-strings', async () => {
+		let capturedArgs: string[] = [];
+		const fakeGit = { raw: async (args: string[]) => { capturedArgs = args; return ''; } };
+		await makeGitManager(fakeGit).getGraphCommits(10, false);
+		assert.ok(
+			!capturedArgs.some(a => a.startsWith('--grep')),
+			'full mode must not include --grep'
+		);
+		assert.ok(
+			!capturedArgs.includes('--fixed-strings'),
+			'full mode must not include --fixed-strings'
+		);
+	});
+
+	test('getGraphCommits: guardian mode uses --fixed-strings and --grep=[Vibe Guardian]', async () => {
+		let capturedArgs: string[] = [];
+		const fakeGit = { raw: async (args: string[]) => { capturedArgs = args; return ''; } };
+		await makeGitManager(fakeGit).getGraphCommits(10, true);
+		assert.ok(
+			capturedArgs.includes('--fixed-strings'),
+			'guardian mode must include --fixed-strings to avoid regex character-class interpretation'
+		);
+		const grepArg = capturedArgs.find(a => a.startsWith('--grep='));
+		assert.ok(grepArg, 'guardian mode must include --grep');
+		assert.strictEqual(
+			grepArg, '--grep=[Vibe Guardian]',
+			'grep pattern must match literal "[Vibe Guardian]" commit messages'
+		);
+	});
+
+	test('getGraphCommits: parses single commit correctly', async () => {
+		const line = [
+			'abc1234567890abcdef',
+			'abc1234',
+			'def5678901234',
+			'Alice',
+			'alice@example.com',
+			'2026-03-24T10:00:00Z',
+			'feat: add login [Vibe Guardian]',
+			'HEAD -> main, origin/main'
+		].join(SEP) + REC;
+		const fakeGit = { raw: async () => line };
+		const result = await makeGitManager(fakeGit).getGraphCommits(10, false);
+		assert.strictEqual(result.length, 1);
+		assert.strictEqual(result[0].hash, 'abc1234567890abcdef');
+		assert.strictEqual(result[0].abbreviatedHash, 'abc1234');
+		assert.deepStrictEqual(result[0].parents, ['def5678901234']);
+		assert.strictEqual(result[0].authorName, 'Alice');
+		assert.strictEqual(result[0].authorEmail, 'alice@example.com');
+		assert.strictEqual(result[0].message, 'feat: add login [Vibe Guardian]');
+		assert.strictEqual(result[0].refs, 'HEAD -> main, origin/main');
+	});
+
+	test('getGraphCommits: parses root commit (no parents) correctly', async () => {
+		const line = [
+			'aaa111',
+			'aaa111',
+			'',   // no parents
+			'Bob',
+			'bob@example.com',
+			'2026-01-01T00:00:00Z',
+			'initial commit',
+			''
+		].join(SEP) + REC;
+		const fakeGit = { raw: async () => line };
+		const result = await makeGitManager(fakeGit).getGraphCommits(10, false);
+		assert.strictEqual(result.length, 1);
+		assert.deepStrictEqual(result[0].parents, [], 'root commit should have empty parents array');
+	});
+
+	test('getGraphCommits: parses merge commit (multiple parents) correctly', async () => {
+		const line = [
+			'merge111',
+			'merge11',
+			'parent1 parent2',  // merge commit has 2 parents
+			'Alice',
+			'alice@example.com',
+			'2026-03-24T12:00:00Z',
+			'Merge branch feature into main',
+			'HEAD -> main'
+		].join(SEP) + REC;
+		const fakeGit = { raw: async () => line };
+		const result = await makeGitManager(fakeGit).getGraphCommits(10, false);
+		assert.strictEqual(result.length, 1);
+		assert.deepStrictEqual(result[0].parents, ['parent1', 'parent2'], 'merge commit should have two parents');
+	});
+
+	test('getGraphCommits: parses multiple commits in order', async () => {
+		const commits = [
+			['hash1', 'h1', 'hash2', 'Alice', 'a@b.com', '2026-03-24', 'second commit', 'HEAD -> main'].join(SEP) + REC,
+			['hash2', 'h2', '',      'Bob',   'b@b.com', '2026-03-01', 'first commit',  ''].join(SEP) + REC,
+		].join('\n');
+		const fakeGit = { raw: async () => commits };
+		const result = await makeGitManager(fakeGit).getGraphCommits(10, false);
+		assert.strictEqual(result.length, 2, 'should parse two commits');
+		assert.strictEqual(result[0].hash, 'hash1');
+		assert.strictEqual(result[1].hash, 'hash2');
+	});
+
+	test('getGraphCommits: filters out records with empty hash', async () => {
+		const commits = [
+			['hash1', 'h1', '', 'Alice', 'a@b.com', '2026-03-24', 'valid commit', ''].join(SEP) + REC,
+			'   ' + REC,  // empty/whitespace record
+		].join('\n');
+		const fakeGit = { raw: async () => commits };
+		const result = await makeGitManager(fakeGit).getGraphCommits(10, false);
+		assert.strictEqual(result.length, 1, 'empty records should be filtered out');
+		assert.strictEqual(result[0].hash, 'hash1');
+	});
+
+	test('getGraphCommits: passes --max-count to git', async () => {
+		let capturedArgs: string[] = [];
+		const fakeGit = { raw: async (args: string[]) => { capturedArgs = args; return ''; } };
+		await makeGitManager(fakeGit).getGraphCommits(42, false);
+		assert.ok(
+			capturedArgs.some(a => a.includes('42')),
+			'should pass max-count to git'
+		);
+	});
+
+	test('getGraphCommits: includes --all flag to show all branches', async () => {
+		let capturedArgs: string[] = [];
+		const fakeGit = { raw: async (args: string[]) => { capturedArgs = args; return ''; } };
+		await makeGitManager(fakeGit).getGraphCommits(10, false);
+		assert.ok(capturedArgs.includes('--all'), 'must include --all to show all branches');
+	});
+});
+
+// ══════════════════════════════════════════════════════════════════
+// GitManager — getBlame unit tests
+// ══════════════════════════════════════════════════════════════════
+suite('GitManager — getBlame', () => {
+	function makeGitManager(fakeGit: object): GitManager {
+		const mgr = new GitManager();
+		(mgr as any).git = fakeGit;
+		return mgr;
+	}
+
+	/** Build a minimal git blame --porcelain record */
+	function makePorcelain(
+		hash: string, finalLine: number, opts: {
+			author?: string; authorMail?: string; authorTime?: number; summary?: string;
+		} = {}
+	): string {
+		const author = opts.author ?? 'Alice';
+		const authorMail = opts.authorMail ?? '<alice@example.com>';
+		const authorTime = opts.authorTime ?? 1711267200; // 2024-03-24T00:00:00Z
+		const summary = opts.summary ?? 'feat: add login';
+		return [
+			`${hash} 1 ${finalLine} 1`,
+			`author ${author}`,
+			`author-mail ${authorMail}`,
+			`author-time ${authorTime}`,
+			`author-tz +0000`,
+			`committer ${author}`,
+			`committer-mail ${authorMail}`,
+			`committer-time ${authorTime}`,
+			`committer-tz +0000`,
+			`summary ${summary}`,
+			`filename src/foo.ts`,
+			`\tconst x = 1;`,
+		].join('\n');
+	}
+
+	test('getBlame: returns empty array when git is not initialized', async () => {
+		const mgr = new GitManager();
+		(mgr as any).git = null;
+		assert.deepStrictEqual(await mgr.getBlame('/any/file.ts'), []);
+	});
+
+	test('getBlame: returns empty array when git returns empty output', async () => {
+		const fakeGit = { raw: async () => '' };
+		assert.deepStrictEqual(await makeGitManager(fakeGit).getBlame('/file.ts'), []);
+	});
+
+	test('getBlame: returns empty array when git throws', async () => {
+		const fakeGit = { raw: async () => { throw new Error('not a git repo'); } };
+		assert.deepStrictEqual(await makeGitManager(fakeGit).getBlame('/file.ts'), []);
+	});
+
+	test('getBlame: calls git blame --porcelain with the file path', async () => {
+		let capturedArgs: string[] = [];
+		const fakeGit = {
+			raw: async (args: string[]) => { capturedArgs = args; return ''; }
+		};
+		await makeGitManager(fakeGit).getBlame('/workspace/src/app.ts');
+		assert.ok(capturedArgs.includes('blame'), 'must call git blame');
+		assert.ok(capturedArgs.includes('--porcelain'), 'must use --porcelain');
+		assert.ok(capturedArgs.includes('/workspace/src/app.ts'), 'must pass file path');
+	});
+
+	test('getBlame: parses a single blame line correctly', async () => {
+		const hash = 'a'.repeat(40);
+		const fakeGit = {
+			raw: async () => makePorcelain(hash, 1, {
+				author: 'Alice', authorMail: '<alice@example.com>',
+				authorTime: 1711267200, summary: 'feat: add login'
+			})
+		};
+		const result = await makeGitManager(fakeGit).getBlame('/file.ts');
+		assert.strictEqual(result.length, 1);
+		assert.strictEqual(result[0].lineNumber, 1);
+		assert.strictEqual(result[0].hash, hash);
+		assert.strictEqual(result[0].shortHash, hash.substring(0, 7));
+		assert.strictEqual(result[0].authorName, 'Alice');
+		assert.strictEqual(result[0].authorEmail, 'alice@example.com');
+		assert.strictEqual(result[0].summary, 'feat: add login');
+		assert.strictEqual(result[0].isUncommitted, false);
+		assert.ok(result[0].date.startsWith('2024'), 'date should be ISO 2024');
+	});
+
+	test('getBlame: strips angle brackets from author-mail', async () => {
+		const hash = 'b'.repeat(40);
+		const fakeGit = { raw: async () => makePorcelain(hash, 1, { authorMail: '<bob@work.com>' }) };
+		const result = await makeGitManager(fakeGit).getBlame('/file.ts');
+		assert.strictEqual(result[0].authorEmail, 'bob@work.com');
+	});
+
+	test('getBlame: isUncommitted is true for zero-hash lines', async () => {
+		const uncommittedHash = '0'.repeat(40);
+		const fakeGit = { raw: async () => makePorcelain(uncommittedHash, 1) };
+		const result = await makeGitManager(fakeGit).getBlame('/file.ts');
+		assert.strictEqual(result[0].isUncommitted, true);
+	});
+
+	test('getBlame: parses multiple lines with shared commit metadata', async () => {
+		// Two lines from the same commit (git blame reuses commit header)
+		const hash = 'c'.repeat(40);
+		const raw = [
+			`${hash} 1 1 2`,
+			`author Carol`,
+			`author-mail <carol@ex.com>`,
+			`author-time 1711267200`,
+			`author-tz +0000`,
+			`committer Carol`,
+			`committer-mail <carol@ex.com>`,
+			`committer-time 1711267200`,
+			`committer-tz +0000`,
+			`summary fix: update config`,
+			`filename config.ts`,
+			`\tconst a = 1;`,
+			`${hash} 2 2`,  // same commit, line 2 (no repeated headers)
+			`\tconst b = 2;`,
+		].join('\n');
+		const fakeGit = { raw: async () => raw };
+		const result = await makeGitManager(fakeGit).getBlame('/config.ts');
+		// We should get at least 1 line (the one with full header)
+		assert.ok(result.length >= 1, 'should parse at least 1 blame line');
+		assert.strictEqual(result[0].authorName, 'Carol');
+		assert.strictEqual(result[0].summary, 'fix: update config');
+	});
+
+	test('getBlame: lineNumber is 1-based matching git output', async () => {
+		const hash = 'd'.repeat(40);
+		const fakeGit = { raw: async () => makePorcelain(hash, 5) };
+		const result = await makeGitManager(fakeGit).getBlame('/file.ts');
+		assert.strictEqual(result[0].lineNumber, 5, 'line number should be 1-based');
+	});
+
+	test('getBlame: date is valid ISO string from unix timestamp', async () => {
+		const hash = 'e'.repeat(40);
+		// 2026-03-24T00:00:00Z = 1774310400
+		const fakeGit = { raw: async () => makePorcelain(hash, 1, { authorTime: 1774310400 }) };
+		const result = await makeGitManager(fakeGit).getBlame('/file.ts');
+		const date = new Date(result[0].date);
+		assert.ok(!isNaN(date.getTime()), 'date should be valid');
+		assert.strictEqual(date.getUTCFullYear(), 2026);
+		assert.strictEqual(date.getUTCMonth(), 2); // March = 2 (0-indexed)
+	});
+});
