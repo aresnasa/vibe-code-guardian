@@ -25,20 +25,22 @@ export class GitGraphProvider {
     public async getGraphData(mode: 'guardian' | 'full', maxCount: number = 200): Promise<GitGraphData> {
         const isGuardianMode = mode === 'guardian';
 
-        const [rawCommits, rawBranches, rawTags, headInfo, contributors, stashes, remotes] = await Promise.all([
+        const [rawCommits, rawBranches, rawTags, headInfo, contributors, stashes, remotes, branchDetails] = await Promise.all([
             this.gitManager.getGraphCommits(maxCount, isGuardianMode),
             this.gitManager.getAllBranches(),
             this.gitManager.getAllTags(),
             this.gitManager.getHeadInfo(),
             this.gitManager.getContributors(),
             this.gitManager.getStashList(),
-            this.gitManager.getRemoteList()
+            this.gitManager.getRemoteList(),
+            this.gitManager.getBranchDetails()
         ]);
 
         // Cache multi-user data for enhanced display
         this.contributors = contributors;
         this.stashes = stashes;
         this.remotes = remotes;
+        this.branchDetails = branchDetails;
 
         // Create commit lookup map for helper methods
         const commitMap = new Map<string, typeof rawCommits[0]>();

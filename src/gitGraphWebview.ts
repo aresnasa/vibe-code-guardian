@@ -405,7 +405,7 @@ export class GitGraphWebviewManager {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}' 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Git Graph</title>
 <style nonce="${nonce}">
@@ -730,6 +730,13 @@ body {
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
 }
+/* Utility: hide element without inline style (CSP-safe) */
+.d-none { display: none !important; }
+/* Tab panel loading / error states */
+.tab-loading { color: var(--vscode-descriptionForeground); padding: 4px; font-size: 12px; }
+.tab-error   { color: var(--vscode-errorForeground, #f48771); padding: 4px; font-size: 12px; }
+/* Filter count span in toolbar */
+.filter-count-span { font-size: 11px; color: var(--vscode-descriptionForeground); margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -749,8 +756,8 @@ body {
         <select id="author-filter">
             <option value="">All</option>
         </select>
-        <span id="filter-count" style="font-size:11px;color:var(--vscode-descriptionForeground);margin-left:4px"></span>
-        <button id="btn-clear-author" style="display:none" class="toolbar-btn">&#10005; Clear</button>
+        <span id="filter-count" class="filter-count-span"></span>
+        <button id="btn-clear-author" class="toolbar-btn d-none">&#10005; Clear</button>
         <span class="spacer"></span>
         <span class="branch-info" id="branch-info"></span>
     </div>
@@ -774,7 +781,7 @@ body {
         <span class="spacer"></span>
         <span class="branch-info" id="branch-info-2"></span>
     </div>
-    <div id="create-branch-form" style="display:none">
+    <div id="create-branch-form" class="d-none">
         <div class="inline-form">
             <input id="new-branch-name" type="text" placeholder="branch-name"/>
             <button id="btn-do-create-branch">Create</button>
@@ -782,18 +789,18 @@ body {
         </div>
     </div>
     <div class="panel-content" id="branch-list-content">
-        <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading branches...</div>
+        <div class="tab-loading" id="branch-loading-msg">Loading branches...</div>
     </div>
 </div>
 <div class="tab-panel" id="tab-contributors">
     <div class="toolbar">
         <button id="btn-refresh-contributors">&#8635; Refresh</button>
-        <button id="clear-author-btn" style="display:none">&#10005; Clear filter</button>
+        <button id="clear-author-btn" class="d-none">&#10005; Clear filter</button>
         <span class="spacer"></span>
         <span id="active-author-label" class="author-filter-active"></span>
     </div>
     <div class="panel-content" id="contributor-list-content">
-        <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading contributors...</div>
+        <div class="tab-loading" id="contributor-loading-msg">Loading contributors...</div>
     </div>
 </div>
 <div class="tab-panel" id="tab-stashes">
@@ -802,7 +809,7 @@ body {
         <button id="btn-toggle-create-stash">+ Save Stash</button>
         <span class="spacer"></span>
     </div>
-    <div id="create-stash-form" style="display:none">
+    <div id="create-stash-form" class="d-none">
         <div class="inline-form">
             <input id="new-stash-message" type="text" placeholder="Stash message (optional)"/>
             <button id="btn-do-create-stash">Save</button>
@@ -810,7 +817,7 @@ body {
         </div>
     </div>
     <div class="panel-content" id="stash-list-content">
-        <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading stashes...</div>
+        <div class="tab-loading" id="stash-loading-msg">Loading stashes...</div>
     </div>
 </div>
 <div class="tab-panel" id="tab-remotes">
@@ -820,7 +827,7 @@ body {
         <span class="spacer"></span>
     </div>
     <div class="panel-content" id="remote-list-content">
-        <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading remotes...</div>
+        <div class="tab-loading" id="remote-loading-msg">Loading remotes...</div>
     </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -861,6 +868,16 @@ window.addEventListener('message', ev => {
                 }
                 showToast('Render error: ' + e.message, 'error');
             }
+            // Pre-populate all tab panels with data already bundled in graphData
+            // This avoids separate round-trip requests and fixes stuck-loading state
+            try {
+                if (Array.isArray(m.data.contributors)) { renderContributorList(m.data.contributors); }
+                if (Array.isArray(m.data.stashes))      { renderStashList(m.data.stashes); }
+                if (Array.isArray(m.data.remotes))      { renderRemoteList(m.data.remotes); }
+                if (Array.isArray(m.data.branchDetails)) { renderBranchList(m.data.branchDetails); }
+            } catch (e2) {
+                console.error('[GitGraph] tab pre-populate error:', e2);
+            }
             break;
         case 'commitDetail':   renderCommitDetail(m.data); break;
         case 'diffContent':    renderDiffPreview(m.data);  break;
@@ -869,6 +886,8 @@ window.addEventListener('message', ev => {
             document.getElementById('loading').classList.remove('visible');
             console.error('[GitGraph] extension error:', m.message);
             showToast('Error: ' + m.message, 'error');
+            // Show error in any still-loading tab panels
+            showTabError(m.message);
             break;
         case 'focusCommit':    focusOnCommit(m.hash); break;
         case 'stashList':      renderStashList(m.data); break;
@@ -1006,9 +1025,9 @@ function clearAuthorFilter() { filterByAuthor(''); }
 function updateContributorFilterUI() {
     document.getElementById('active-author-label').textContent =
         activeAuthor ? 'Filtered: ' + activeAuthor : '';
-    document.getElementById('clear-author-btn').style.display = activeAuthor ? '' : 'none';
+    document.getElementById('clear-author-btn').classList.toggle('d-none', !activeAuthor);
     const clrBtn = document.getElementById('btn-clear-author');
-    if (clrBtn) clrBtn.style.display = activeAuthor ? '' : 'none';
+    if (clrBtn) clrBtn.classList.toggle('d-none', !activeAuthor);
 }
 
 function renderGraph(data) {
@@ -1263,13 +1282,13 @@ function closeDetail() {
 }
 
 function loadBranches() {
-    document.getElementById('branch-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
+    document.getElementById('branch-list-content').innerHTML = '<div class="tab-loading">Loading...</div>';
     vscode.postMessage({ type: 'requestBranchDetails' });
 }
 function toggleCreateBranchForm() {
     const f = document.getElementById('create-branch-form');
-    f.style.display = f.style.display === 'none' ? '' : 'none';
-    if (f.style.display !== 'none') document.getElementById('new-branch-name').focus();
+    f.classList.toggle('d-none');
+    if (!f.classList.contains('d-none')) document.getElementById('new-branch-name').focus();
 }
 function doCreateBranch() {
     const n = document.getElementById('new-branch-name').value.trim();
@@ -1329,7 +1348,7 @@ function renderBranchList(branches) {
 }
 
 function loadContributors() {
-    document.getElementById('contributor-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
+    document.getElementById('contributor-list-content').innerHTML = '<div class="tab-loading">Loading...</div>';
     vscode.postMessage({ type: 'requestContributors' });
 }
 function renderContributorList(contribs) {
@@ -1355,13 +1374,13 @@ function renderContributorList(contribs) {
 }
 
 function loadStashes() {
-    document.getElementById('stash-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
+    document.getElementById('stash-list-content').innerHTML = '<div class="tab-loading">Loading...</div>';
     vscode.postMessage({ type: 'requestStashes' });
 }
 function toggleStashForm() {
     const f = document.getElementById('create-stash-form');
-    f.style.display = f.style.display === 'none' ? '' : 'none';
-    if (f.style.display !== 'none') { document.getElementById('new-stash-message').focus(); }
+    f.classList.toggle('d-none');
+    if (!f.classList.contains('d-none')) { document.getElementById('new-stash-message').focus(); }
 }
 function doCreateStash() {
     const msg = document.getElementById('new-stash-message').value.trim();
@@ -1391,7 +1410,7 @@ function renderStashList(stashes) {
 }
 
 function loadRemotes() {
-    document.getElementById('remote-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
+    document.getElementById('remote-list-content').innerHTML = '<div class="tab-loading">Loading...</div>';
     vscode.postMessage({ type: 'requestRemotes' });
 }
 function doFetchAll() { vscode.postMessage({ type: 'fetchRemote', remote: '--all' }); }
@@ -1420,6 +1439,20 @@ function showToast(msg, type) {
     const t = document.getElementById('toast');
     t.textContent = msg; t.className = 'toast ' + type + ' show';
     setTimeout(() => t.classList.remove('show'), 3500);
+}
+/** Show an error message inside any tab panel still showing loading state */
+function showTabError(msg) {
+    const loadingIds = [
+        'branch-list-content', 'contributor-list-content',
+        'stash-list-content', 'remote-list-content'
+    ];
+    const errHtml = '<div class="tab-error">&#9888; Error: ' + escH(msg) + '</div>';
+    for (const id of loadingIds) {
+        const el = document.getElementById(id);
+        if (el && el.querySelector('.tab-loading')) {
+            el.innerHTML = errHtml;
+        }
+    }
 }
 function relDate(ds) {
     if (!ds) return '';

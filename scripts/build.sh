@@ -800,6 +800,43 @@ PYEOF
         failed=$(( failed + 1 ))
     fi
 
+    # ── 8. Tab panel pre-population check ────────────────────────────────
+    log_step "Tab panel pre-population (graphData pre-populates all tabs)"
+    local tab_ok=true
+    # Check that graphData handler calls renderContributorList/renderStashList/renderRemoteList/renderBranchList
+    if ! grep -q 'renderContributorList(m.data.contributors)' "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_error "Tab pre-pop check FAILED – graphData handler does not call renderContributorList with pre-loaded data"
+        tab_ok=false
+    fi
+    if ! grep -q 'renderStashList(m.data.stashes)' "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_error "Tab pre-pop check FAILED – graphData handler does not call renderStashList with pre-loaded data"
+        tab_ok=false
+    fi
+    if ! grep -q 'renderRemoteList(m.data.remotes)' "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_error "Tab pre-pop check FAILED – graphData handler does not call renderRemoteList with pre-loaded data"
+        tab_ok=false
+    fi
+    if ! grep -q 'renderBranchList(m.data.branchDetails)' "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_error "Tab pre-pop check FAILED – graphData handler does not call renderBranchList with pre-loaded data"
+        tab_ok=false
+    fi
+    # Check that getGraphData fetches branchDetails
+    if ! grep -q 'getBranchDetails()' "${PROJECT_ROOT}/src/gitGraphProvider.ts"; then
+        log_error "Tab pre-pop check FAILED – getGraphData does not call getBranchDetails()"
+        tab_ok=false
+    fi
+    # Check that d-none CSS class is used (not inline style="display:none") for forms
+    if grep -q 'style="display:none"' "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_error "Tab pre-pop check FAILED – inline style=\"display:none\" still used (should use class=\"d-none\")"
+        tab_ok=false
+    fi
+    if $tab_ok; then
+        log_success "Tab panel pre-population check passed"
+        passed=$(( passed + 1 ))
+    else
+        failed=$(( failed + 1 ))
+    fi
+
     # ── Summary ───────────────────────────────────────────────────────────
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
