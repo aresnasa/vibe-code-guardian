@@ -2168,6 +2168,95 @@ public/bundles/
         return result;
     }
 
+    /**
+     * Clone a repository for verification testing
+     */
+    public async cloneRepository(repoUrl: string, targetDir: string): Promise<{ success: boolean; message: string }> {
+        try {
+            const gitInstance = simpleGit(targetDir);
+            await gitInstance.clone(repoUrl);
+            return { success: true, message: `Cloned ${repoUrl} to ${targetDir}` };
+        } catch (error) {
+            return { success: false, message: `Failed to clone: ${String(error)}` };
+        }
+    }
+
+    /**
+     * Get all branches with tracking information
+     */
+    public async getAllBranchesWithTracking(): Promise<Array<{
+        name: string;
+        isCurrent: boolean;
+        commitHash: string;
+        isRemote: boolean;
+        tracking?: string;
+        ahead: number;
+        behind: number;
+        authorEmail?: string;
+    }>> {
+        if (!this.git) { return []; }
+        try {
+            const branches = await this.git.branch(['-v']);
+            const result: Array<{
+                name: string;
+                isCurrent: boolean;
+                commitHash: string;
+                isRemote: boolean;
+                tracking?: string;
+                ahead: number;
+                behind: number;
+                authorEmail?: string;
+            }> = [];
+
+            for (const branchName of Object.keys(branches.all)) {
+                const branch = (branches.all as Record<string, any>)[branchName];
+                const tracking = branch.tracking;
+
+                // Get ahead/behind counts
+                let ahead = 0;
+                let behind = 0;
+                if (tracking && tracking.indexOf('/') !== -1) {
+                    try {
+                        const aheadBehind = await this.git.raw(['rev-list', '--left-right', '--count', `${tracking}...HEAD`]);
+                        const parts = aheadBehind.trim().split('\t');
+                        if (parts.length === 2) {
+                            ahead = parseInt(parts[0], 10);
+                            behind = parseInt(parts[1], 10);
+                        }
+                    } catch {
+                        // Ignore errors in ahead/behind calculation
+                    }
+                }
+
+                // Get author email from latest commit
+                let authorEmail = '';
+                try {
+                    const logOutput = await this.git.log({ from: branch.name, maxCount: 1, format: '%ae' });
+                    if (logOutput && logOutput.latest) {
+                        authorEmail = typeof logOutput.latest === 'string' ? logOutput.latest : '';
+                    }
+                } catch {
+                    // Ignore errors in author lookup
+                }
+
+                result.push({
+                    name: branchName,
+                    isCurrent: branch.current || false,
+                    commitHash: branch.commit || '',
+                    isRemote: false,
+                    tracking,
+                    ahead,
+                    behind,
+                    authorEmail
+                });
+            }
+
+            return result;
+        } catch {
+            return [];
+        }
+    }
+
     public dispose(): void {
         // Cleanup if needed
     }

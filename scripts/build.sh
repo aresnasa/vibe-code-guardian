@@ -684,20 +684,120 @@ do_test() {
     log_step "Unit tests (npm test)"
     if npm test; then
         log_success "Unit tests passed"
-        ((passed++))
+        passed=$(( passed + 1 ))
     else
         log_error "Unit tests FAILED"
-        ((failed++))
+        failed=$(( failed + 1 ))
     fi
 
     # ── 2. Integration tests (run-tests.sh shell suite) ──────────────────
     log_step "Integration tests (scripts/run-tests.sh)"
     if bash "${PROJECT_ROOT}/scripts/run-tests.sh"; then
         log_success "Integration tests passed"
-        ((passed++))
+        passed=$(( passed + 1 ))
     else
         log_error "Integration tests FAILED"
-        ((failed++))
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 3. Git graph verification (Node.js, no VS Code required) ─────────
+    log_step "Git graph verification (scripts/verify-git-graph.mjs)"
+    if node "${PROJECT_ROOT}/scripts/verify-git-graph.mjs"; then
+        log_success "Git graph verification passed"
+        passed=$(( passed + 1 ))
+    else
+        log_error "Git graph verification FAILED"
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 4. Verification functionality test ──────────────────────────────
+    log_step "Verification functionality test"
+    if npm run test && npm run check-types; then
+        log_success "Verification functionality test passed"
+        passed=$(( passed + 1 ))
+    else
+        log_error "Verification functionality test FAILED"
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 5. Webview CSP compliance: no inline event handlers ─────────────
+    log_step "Webview CSP compliance (no inline onclick/onchange/onkeydown)"
+    if ! grep -q 'onclick=\|onchange=\|onkeydown=' "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_success "Webview CSP compliance passed (no inline event handlers)"
+        passed=$(( passed + 1 ))
+    else
+        log_error "Webview CSP compliance FAILED – inline event handlers found in gitGraphWebview.ts"
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 6. Webview JS syntax check (node --check) ────────────────────────
+    log_step "Webview JS syntax check"
+    # Extract the <script> block from the webview HTML in dist, check for syntax errors
+    local syntax_ok=false
+    if python3 - <<'PYEOF' 2>/dev/null
+import sys, re
+
+with open('dist/extension.js', 'r') as f:
+    content = f.read()
+
+# Find webview HTML boundaries
+start = content.find('<!DOCTYPE html>')
+end = content.find('</html>`', start)
+if start < 0 or end < 0:
+    print('Cannot find webview HTML', file=sys.stderr)
+    sys.exit(1)
+
+html = content[start:end + 8]  # include </html>
+html = html.replace('${nonce}', 'test-nonce-12345')
+
+# Extract <script> block
+m = re.search(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+if not m:
+    print('Cannot find script block', file=sys.stderr)
+    sys.exit(1)
+
+script = m.group(1)
+# Replace VS Code API call with a stub so node can parse it
+script = script.replace('acquireVsCodeApi()', '({postMessage:()=>{},getState:()=>({}),setState:()=>{}})')
+
+with open('/tmp/webview_syntax_check.js', 'w') as f:
+    f.write(script)
+PYEOF
+    then
+        if node --check /tmp/webview_syntax_check.js 2>/dev/null; then
+            log_success "Webview JS syntax check passed"
+            syntax_ok=true
+            passed=$(( passed + 1 ))
+        else
+            log_error "Webview JS syntax check FAILED – JavaScript syntax error in webview script"
+            node --check /tmp/webview_syntax_check.js 2>&1 | head -5 || true
+            failed=$(( failed + 1 ))
+        fi
+    else
+        log_error "Webview JS syntax check FAILED – could not extract script block"
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 7. Author-filter smart-hide check ────────────────────────────────
+    log_step "Author filter: smart-hide (author-hidden CSS + no prompt())"
+    local filter_ok=true
+    if ! grep -q 'author-hidden' "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_error "Author filter check FAILED – 'author-hidden' CSS class not found in gitGraphWebview.ts"
+        filter_ok=false
+    fi
+    if ! grep -q 'baselineHashes' "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_error "Author filter check FAILED – 'baselineHashes' logic not found in gitGraphWebview.ts"
+        filter_ok=false
+    fi
+    if grep -q "prompt(" "${PROJECT_ROOT}/src/gitGraphWebview.ts"; then
+        log_error "Author filter check FAILED – prompt() still used in gitGraphWebview.ts (blocked in VS Code webviews)"
+        filter_ok=false
+    fi
+    if $filter_ok; then
+        log_success "Author filter smart-hide check passed"
+        passed=$(( passed + 1 ))
+    else
+        failed=$(( failed + 1 ))
     fi
 
     # ── Summary ───────────────────────────────────────────────────────────

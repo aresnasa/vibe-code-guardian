@@ -11,7 +11,7 @@ import { WebviewToExtensionMessage } from './types';
 export class GitGraphWebviewManager {
     private panel: vscode.WebviewPanel | undefined;
     private gitGraphProvider: GitGraphProvider;
-    private mode: 'guardian' | 'full' = 'guardian';
+    private mode: 'guardian' | 'full' = 'full';
     private disposables: vscode.Disposable[] = [];
     private pendingTab: string | undefined;
 
@@ -510,7 +510,8 @@ body {
 }
 .graph-row.guardian-commit .commit-msg { font-weight: 600; }
 .graph-row.dimmed { opacity: 0.4; }
-.graph-row.author-dimmed { opacity: 0.22; }
+.graph-row.author-dimmed { opacity: 0.3; }
+.graph-row.author-hidden { display: none; }
 .graph-cell { vertical-align: middle; white-space: nowrap; padding: 0; height: var(--row-height); }
 .graph-cell-svg { width: auto; min-width: 24px; }
 .commit-hash {
@@ -733,21 +734,23 @@ body {
 </head>
 <body>
 <div class="tab-bar">
-    <button class="tab-btn active" onclick="showTab('graph')">&#9913; Graph</button>
-    <button class="tab-btn" onclick="showTab('branches')">&#xa652; Branches</button>
-    <button class="tab-btn" onclick="showTab('contributors')">&#128100; Contributors</button>
-    <button class="tab-btn" onclick="showTab('stashes')">&#128230; Stashes</button>
-    <button class="tab-btn" onclick="showTab('remotes')">&#9729; Remotes</button>
+    <button class="tab-btn active" data-tab="graph">&#9913; Graph</button>
+    <button class="tab-btn" data-tab="branches">&#xa652; Branches</button>
+    <button class="tab-btn" data-tab="contributors">&#128100; Contributors</button>
+    <button class="tab-btn" data-tab="stashes">&#128230; Stashes</button>
+    <button class="tab-btn" data-tab="remotes">&#9729; Remotes</button>
 </div>
 <div class="tab-panel active" id="tab-graph">
     <div class="toolbar">
-        <button id="btn-guardian" class="active" onclick="switchMode('guardian')">Guardian</button>
-        <button id="btn-full" onclick="switchMode('full')">Full History</button>
-        <button onclick="refreshGraph()">&#8635; Refresh</button>
+        <button id="btn-guardian" data-mode="guardian">Guardian</button>
+        <button id="btn-full" class="active" data-mode="full">Full History</button>
+        <button id="btn-refresh-graph">&#8635; Refresh</button>
         <span>Author:</span>
-        <select id="author-filter" onchange="applyAuthorFilter()">
+        <select id="author-filter">
             <option value="">All</option>
         </select>
+        <span id="filter-count" style="font-size:11px;color:var(--vscode-descriptionForeground);margin-left:4px"></span>
+        <button id="btn-clear-author" style="display:none" class="toolbar-btn">&#10005; Clear</button>
         <span class="spacer"></span>
         <span class="branch-info" id="branch-info"></span>
     </div>
@@ -759,24 +762,23 @@ body {
     <div class="detail-panel" id="detail-panel">
         <div class="detail-header">
             <strong id="detail-title">Commit Details</strong>
-            <button class="close-btn" onclick="closeDetail()">&times;</button>
+            <button class="close-btn" id="btn-close-detail">&times;</button>
         </div>
         <div class="detail-body" id="detail-body"></div>
     </div>
 </div>
 <div class="tab-panel" id="tab-branches">
     <div class="toolbar">
-        <button onclick="loadBranches()">&#8635; Refresh</button>
-        <button onclick="toggleCreateBranchForm()">+ New Branch</button>
+        <button id="btn-refresh-branches">&#8635; Refresh</button>
+        <button id="btn-toggle-create-branch">+ New Branch</button>
         <span class="spacer"></span>
         <span class="branch-info" id="branch-info-2"></span>
     </div>
     <div id="create-branch-form" style="display:none">
         <div class="inline-form">
-            <input id="new-branch-name" type="text" placeholder="branch-name"
-                   onkeydown="if(event.key==='Enter')doCreateBranch()"/>
-            <button onclick="doCreateBranch()">Create</button>
-            <button class="cancel" onclick="toggleCreateBranchForm()">Cancel</button>
+            <input id="new-branch-name" type="text" placeholder="branch-name"/>
+            <button id="btn-do-create-branch">Create</button>
+            <button class="cancel" id="btn-cancel-create-branch">Cancel</button>
         </div>
     </div>
     <div class="panel-content" id="branch-list-content">
@@ -785,8 +787,8 @@ body {
 </div>
 <div class="tab-panel" id="tab-contributors">
     <div class="toolbar">
-        <button onclick="loadContributors()">&#8635; Refresh</button>
-        <button id="clear-author-btn" onclick="clearAuthorFilter()" style="display:none">&#10005; Clear filter</button>
+        <button id="btn-refresh-contributors">&#8635; Refresh</button>
+        <button id="clear-author-btn" style="display:none">&#10005; Clear filter</button>
         <span class="spacer"></span>
         <span id="active-author-label" class="author-filter-active"></span>
     </div>
@@ -796,9 +798,16 @@ body {
 </div>
 <div class="tab-panel" id="tab-stashes">
     <div class="toolbar">
-        <button onclick="loadStashes()">&#8635; Refresh</button>
-        <button onclick="doCreateStash()">+ Save Stash</button>
+        <button id="btn-refresh-stashes">&#8635; Refresh</button>
+        <button id="btn-toggle-create-stash">+ Save Stash</button>
         <span class="spacer"></span>
+    </div>
+    <div id="create-stash-form" style="display:none">
+        <div class="inline-form">
+            <input id="new-stash-message" type="text" placeholder="Stash message (optional)"/>
+            <button id="btn-do-create-stash">Save</button>
+            <button class="cancel" id="btn-cancel-stash">Cancel</button>
+        </div>
     </div>
     <div class="panel-content" id="stash-list-content">
         <div style="color:var(--vscode-descriptionForeground);padding:4px">Loading stashes...</div>
@@ -806,8 +815,8 @@ body {
 </div>
 <div class="tab-panel" id="tab-remotes">
     <div class="toolbar">
-        <button onclick="loadRemotes()">&#8635; Refresh</button>
-        <button onclick="doFetchAll()">&#8595; Fetch All</button>
+        <button id="btn-refresh-remotes">&#8635; Refresh</button>
+        <button id="btn-fetch-all">&#8595; Fetch All</button>
         <span class="spacer"></span>
     </div>
     <div class="panel-content" id="remote-list-content">
@@ -829,7 +838,7 @@ const LANE_WIDTH = 14;
 const NODE_RADIUS = 4;
 let currentData   = null;
 let selectedHash  = null;
-let currentMode   = 'guardian';
+let currentMode   = 'full';
 let activeAuthor  = '';
 
 vscode.postMessage({ type: 'ready' });
@@ -840,13 +849,27 @@ window.addEventListener('message', ev => {
         case 'graphData':
             document.getElementById('loading').classList.remove('visible');
             currentData = m.data;
-            renderGraph(m.data);
-            updateAuthorSelect(m.data);
+            console.log('[GitGraph] received graphData: ' + (m.data && m.data.commits ? m.data.commits.length : 0) + ' commits, mode=' + (m.data && m.data.mode));
+            try {
+                updateAuthorSelect(m.data);
+                renderGraph(m.data);
+            } catch (e) {
+                console.error('[GitGraph] renderGraph error:', e);
+                const tbody = document.getElementById('graph-body');
+                if (tbody) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;color:red;text-align:center">Render error: ' + escH(String(e)) + '</td></tr>';
+                }
+                showToast('Render error: ' + e.message, 'error');
+            }
             break;
         case 'commitDetail':   renderCommitDetail(m.data); break;
         case 'diffContent':    renderDiffPreview(m.data);  break;
         case 'loading':        document.getElementById('loading').classList.toggle('visible', !!m.loading); break;
-        case 'error':          document.getElementById('loading').classList.remove('visible'); showToast('Error: ' + m.message, 'error'); break;
+        case 'error':
+            document.getElementById('loading').classList.remove('visible');
+            console.error('[GitGraph] extension error:', m.message);
+            showToast('Error: ' + m.message, 'error');
+            break;
         case 'focusCommit':    focusOnCommit(m.hash); break;
         case 'stashList':      renderStashList(m.data); break;
         case 'contributors':   renderContributorList(m.data); break;
@@ -857,12 +880,82 @@ window.addEventListener('message', ev => {
     }
 });
 
+// ── Static button event listeners ────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => showTab(btn.dataset.tab));
+});
+document.getElementById('btn-guardian').addEventListener('click', () => switchMode('guardian'));
+document.getElementById('btn-full').addEventListener('click', () => switchMode('full'));
+document.getElementById('btn-refresh-graph').addEventListener('click', () => refreshGraph());
+document.getElementById('author-filter').addEventListener('change', () => applyAuthorFilter());
+document.getElementById('btn-clear-author').addEventListener('click', () => clearAuthorFilter());
+document.getElementById('btn-close-detail').addEventListener('click', () => closeDetail());
+document.getElementById('btn-refresh-branches').addEventListener('click', () => loadBranches());
+document.getElementById('btn-toggle-create-branch').addEventListener('click', () => toggleCreateBranchForm());
+document.getElementById('btn-do-create-branch').addEventListener('click', () => doCreateBranch());
+document.getElementById('btn-cancel-create-branch').addEventListener('click', () => toggleCreateBranchForm());
+document.getElementById('new-branch-name').addEventListener('keydown', e => { if (e.key === 'Enter') doCreateBranch(); });
+document.getElementById('btn-refresh-contributors').addEventListener('click', () => loadContributors());
+document.getElementById('clear-author-btn').addEventListener('click', () => clearAuthorFilter());
+document.getElementById('btn-refresh-stashes').addEventListener('click', () => loadStashes());
+document.getElementById('btn-toggle-create-stash').addEventListener('click', () => toggleStashForm());
+document.getElementById('btn-do-create-stash').addEventListener('click', () => doCreateStash());
+document.getElementById('btn-cancel-stash').addEventListener('click', () => toggleStashForm());
+document.getElementById('new-stash-message').addEventListener('keydown', e => { if (e.key === 'Enter') doCreateStash(); });
+document.getElementById('btn-refresh-remotes').addEventListener('click', () => loadRemotes());
+document.getElementById('btn-fetch-all').addEventListener('click', () => doFetchAll());
+
+// ── Event delegation for dynamically rendered content ────────────────────
+document.getElementById('graph-body').addEventListener('click', e => {
+    const row = e.target.closest('tr[data-hash]');
+    if (row) selectCommit(row.dataset.hash);
+});
+document.getElementById('detail-body').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    if (action === 'reqDiff')  { reqDiff(btn.dataset.hash, btn.dataset.file); }
+    if (action === 'openVC')   { openVC(btn.dataset.file, btn.dataset.hash); }
+});
+document.getElementById('branch-list-content').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const name = btn.dataset.name || '';
+    if (action === 'checkout')   { doCheckout(name); }
+    if (action === 'merge')      { doMerge(name, btn.dataset.strategy || 'no-ff'); }
+    if (action === 'rebase')     { doRebaseOnto(name); }
+    if (action === 'deleteBranch') { doDeleteBranch(name, btn.dataset.force === 'true'); }
+});
+document.getElementById('contributor-list-content').addEventListener('click', e => {
+    const item = e.target.closest('[data-author]');
+    if (item) filterByAuthor(item.dataset.author);
+});
+document.getElementById('stash-list-content').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const idx = parseInt(btn.dataset.index, 10);
+    const action = btn.dataset.action;
+    if (action === 'applyStash') { vscode.postMessage({ type: 'applyStash', index: idx }); }
+    if (action === 'popStash')   { vscode.postMessage({ type: 'popStash',   index: idx }); }
+    if (action === 'dropStash')  { vscode.postMessage({ type: 'dropStash',  index: idx }); }
+});
+document.getElementById('remote-list-content').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const remote = btn.dataset.remote || '';
+    if (action === 'fetchRemote') { vscode.postMessage({ type: 'fetchRemote', remote }); }
+    if (action === 'pullBranch')  { vscode.postMessage({ type: 'pullBranch', remote, branch: '', rebase: false }); }
+    if (action === 'pushBranch')  { vscode.postMessage({ type: 'pushBranch', remote, branch: '', force: false }); }
+});
+
 function showTab(name) {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('tab-' + name).classList.add('active');
     document.querySelectorAll('.tab-btn').forEach(b => {
-        if (b.getAttribute('onclick') === "showTab('" + name + "')") b.classList.add('active');
+        if (b.dataset.tab === name) b.classList.add('active');
     });
     if (name === 'branches')     loadBranches();
     if (name === 'contributors') loadContributors();
@@ -880,7 +973,7 @@ function refreshGraph() { vscode.postMessage({ type: 'requestGraphData', mode: c
 
 function updateAuthorSelect(data) {
     const sel = document.getElementById('author-filter');
-    const prev = sel.value;
+    const prev = activeAuthor || sel.value;
     sel.innerHTML = '<option value="">All</option>';
     const names = [...new Set((data.commits || []).map(c => c.authorName))].sort();
     names.forEach(n => {
@@ -889,6 +982,9 @@ function updateAuthorSelect(data) {
         if (n === prev) o.selected = true;
         sel.appendChild(o);
     });
+    // Sync activeAuthor with actual select value (author may not exist in new mode)
+    activeAuthor = sel.value;
+    updateContributorFilterUI();
 }
 
 function applyAuthorFilter() {
@@ -911,6 +1007,8 @@ function updateContributorFilterUI() {
     document.getElementById('active-author-label').textContent =
         activeAuthor ? 'Filtered: ' + activeAuthor : '';
     document.getElementById('clear-author-btn').style.display = activeAuthor ? '' : 'none';
+    const clrBtn = document.getElementById('btn-clear-author');
+    if (clrBtn) clrBtn.style.display = activeAuthor ? '' : 'none';
 }
 
 function renderGraph(data) {
@@ -953,15 +1051,32 @@ function renderGraph(data) {
     const svgW = Math.max(60, (data.totalLanes + 1) * LANE_WIDTH + 20);
     const cidx = new Map();
     data.commits.forEach((c, i) => cidx.set(c.hash, i));
+    // Precompute baseline commits for smart author filtering
+    // Baseline = merge commits + direct parents of matching commits
+    const baselineHashes = new Set();
+    if (activeAuthor) {
+        const matchedParents = new Set();
+        (data.commits || []).forEach(c => {
+            if (c.authorName === activeAuthor) {
+                (c.parents || []).forEach(ph => matchedParents.add(ph));
+            }
+        });
+        (data.commits || []).forEach(c => {
+            if (c.parents && c.parents.length > 1) { baselineHashes.add(c.hash); }
+            if (matchedParents.has(c.hash)) { baselineHashes.add(c.hash); }
+        });
+    }
     for (let ri = 0; ri < data.commits.length; ri++) {
         const c = data.commits[ri];
         const tr = document.createElement('tr');
         tr.className = 'graph-row';
         if (c.isGuardianCommit) tr.classList.add('guardian-commit');
         if (currentMode === 'guardian' && !c.isGuardianCommit) tr.classList.add('dimmed');
-        if (activeAuthor && c.authorName !== activeAuthor) tr.classList.add('author-dimmed');
+        if (activeAuthor && c.authorName !== activeAuthor) {
+            // Baseline commits (merge points, direct parents) stay dimmed; all else hidden
+            tr.classList.add(baselineHashes.has(c.hash) ? 'author-dimmed' : 'author-hidden');
+        }
         tr.dataset.hash = c.hash;
-        tr.onclick = () => selectCommit(c.hash);
         const sc = document.createElement('td');
         sc.className = 'graph-cell graph-cell-svg';
         sc.innerHTML = buildSvg(c, ri, data, cidx, svgW);
@@ -976,7 +1091,7 @@ function renderGraph(data) {
         if (c.isGuardianCommit) mh += '<span class="guardian-badge">VG</span>';
         (branchMap.get(c.hash) || []).forEach(b => {
             const cls = b.isCurrent ? 'ref-badge head' : b.isRemote ? 'ref-badge remote' : 'ref-badge branch';
-            mh += '<span class="' + cls + '">' + escH(b.name.replace(/^remotes\\/[^\\/]+\\//, '')) + '</span>';
+            mh += '<span class="' + cls + '">' + escH(b.name.replace(new RegExp('^remotes/[^/]+/'), '')) + '</span>';
         });
         (tagMap.get(c.hash) || []).forEach(t => {
             mh += '<span class="ref-badge tag">' + escH(t.name) + '</span>';
@@ -993,12 +1108,26 @@ function renderGraph(data) {
         tr.appendChild(dc);
         tbody.appendChild(tr);
     }
+    // Update filter count status
+    const filterCount = document.getElementById('filter-count');
+    if (filterCount) {
+        if (activeAuthor) {
+            const cnt = (data.commits || []).filter(c => c.authorName === activeAuthor).length;
+            filterCount.textContent = cnt + ' of ' + data.commits.length + ' commits';
+        } else {
+            filterCount.textContent = '';
+        }
+    }
 }
 
 function buildSvg(commit, ri, data, cidx, W) {
     const cx = 10 + commit.lane * LANE_WIDTH;
     const cy = ROW_HEIGHT / 2;
     let lines = '', nodes = '';
+
+    // ── Pass-through lanes ────────────────────────────────────────────────
+    // Collect lanes where a connection from a commit ABOVE passes through
+    // this row to reach a parent BELOW this row.
     const passLanes = new Set();
     for (let p = 0; p < ri; p++) {
         const pc = data.commits[p];
@@ -1006,6 +1135,7 @@ function buildSvg(commit, ri, data, cidx, W) {
             const pi = cidx.get(ph);
             if (pi !== undefined && pi > ri) {
                 const parent = data.commits[pi];
+                // The connecting lane is whichever lane the bezier will end on
                 passLanes.add(pc.lane === parent.lane ? pc.lane : parent.lane);
             }
         }
@@ -1016,10 +1146,27 @@ function buildSvg(commit, ri, data, cidx, W) {
         const col = LANE_COLORS[lane % LANE_COLORS.length];
         lines += '<line x1="' + lx + '" y1="0" x2="' + lx + '" y2="' + ROW_HEIGHT + '" stroke="' + col + '" stroke-width="1.5" opacity="0.45"/>';
     });
+
+    // ── Incoming lines (top-half: y=0 → cy) ──────────────────────────────
+    // Each child commit above this commit drew the bottom half of the edge.
+    // We must draw the matching top half so the two halves meet at the node.
+    for (const childHash of (commit.children || [])) {
+        const childIdx = cidx.get(childHash);
+        if (childIdx === undefined || childIdx >= ri) { continue; }
+        const child = data.commits[childIdx];
+        const parentIdx = child.parents.indexOf(commit.hash);
+        if (parentIdx < 0) { continue; }
+        const isMergeParent = parentIdx > 0;
+        const col = LANE_COLORS[(isMergeParent ? commit.lane : child.lane) % LANE_COLORS.length];
+        const sw = isMergeParent ? '1.5' : '2';
+        lines += '<line x1="' + cx + '" y1="0" x2="' + cx + '" y2="' + cy + '" stroke="' + col + '" stroke-width="' + sw + '"/>';
+    }
+
+    // ── Outgoing lines (bottom-half: cy → ROW_HEIGHT) ─────────────────────
     for (let pi = 0; pi < commit.parents.length; pi++) {
         const pHash = commit.parents[pi];
         const pIdx = cidx.get(pHash);
-        if (pIdx === undefined) continue;
+        if (pIdx === undefined) { continue; }
         const parent = data.commits[pIdx];
         const px = 10 + parent.lane * LANE_WIDTH;
         const isMerge = pi > 0;
@@ -1032,6 +1179,8 @@ function buildSvg(commit, ri, data, cidx, W) {
             lines += '<path d="M' + cx + ' ' + cy + ' C' + cx + ' ' + m + ' ' + px + ' ' + (ROW_HEIGHT - m) + ' ' + px + ' ' + ROW_HEIGHT + '" fill="none" stroke="' + col + '" stroke-width="' + sw + '"/>';
         }
     }
+
+    // ── Commit node ───────────────────────────────────────────────────────
     const ncol = LANE_COLORS[commit.lane % LANE_COLORS.length];
     const isHead = currentData && commit.hash === currentData.headHash;
     const isMergeC = commit.parents.length > 1;
@@ -1067,16 +1216,18 @@ function renderCommitDetail(d) {
     if (d.changedFiles.length > 0) {
         h += '<strong>Changed Files (' + d.changedFiles.length + '):</strong><ul class="file-list">';
         for (const f of d.changedFiles) {
-            h += '<li onclick="event.stopPropagation()">';
+            const safeHash = escH(d.hash);
+            const safePath = escH(f.path);
+            h += '<li>';
             h += '<span class="file-status ' + f.status + '">' + f.status[0].toUpperCase() + '</span>';
-            h += '<span>' + escH(f.path) + '</span>';
+            h += '<span>' + safePath + '</span>';
             const stats = !f.binary
                 ? '<span class="additions">+' + f.insertions + '</span> <span class="deletions">-' + f.deletions + '</span>'
                 : 'binary';
             h += '<span class="file-stats">' + stats + '</span>';
             h += '<span class="file-actions">';
-            h += '<button onclick="reqDiff(\''+ea(d.hash)+'\',\''+ea(f.path)+'\')">Diff</button>';
-            h += '<button onclick="openVC(\''+ea(f.path)+'\',\''+ea(d.hash)+'\')">Open</button>';
+            h += '<button data-action="reqDiff" data-hash="' + safeHash + '" data-file="' + safePath + '">Diff</button>';
+            h += '<button data-action="openVC" data-hash="' + safeHash + '" data-file="' + safePath + '">Open</button>';
             h += '</span></li>';
         }
         h += '</ul>';
@@ -1144,8 +1295,9 @@ function renderBranchList(branches) {
     if (local.length) {
         h += '<div class="section-title">LOCAL BRANCHES</div>';
         for (const b of local) {
+            const safeName = escH(b.name);
             h += '<div class="branch-item' + (b.isCurrent ? ' current' : '') + '">';
-            h += '<span class="branch-name">' + (b.isCurrent ? '&#10003; ' : '&nbsp;&nbsp;') + escH(b.name) + '</span>';
+            h += '<span class="branch-name">' + (b.isCurrent ? '&#10003; ' : '&nbsp;&nbsp;') + safeName + '</span>';
             if (b.tracking) h += '<span class="branch-tracking">' + escH(b.tracking) + '</span>';
             if (b.ahead || b.behind) {
                 h += '<span class="ahead-behind">';
@@ -1155,10 +1307,10 @@ function renderBranchList(branches) {
             }
             h += '<span class="item-actions">';
             if (!b.isCurrent) {
-                h += '<button onclick="doCheckout(\''+ea(b.name)+'\')">Checkout</button>';
-                h += '<button onclick="doMerge(\''+ea(b.name)+'\',\'no-ff\')">Merge</button>';
-                h += '<button onclick="doRebaseOnto(\''+ea(b.name)+'\')">Rebase onto</button>';
-                h += '<button class="danger" onclick="doDeleteBranch(\''+ea(b.name)+'\',false)">Delete</button>';
+                h += '<button data-action="checkout" data-name="' + safeName + '">Checkout</button>';
+                h += '<button data-action="merge" data-name="' + safeName + '" data-strategy="no-ff">Merge</button>';
+                h += '<button data-action="rebase" data-name="' + safeName + '">Rebase onto</button>';
+                h += '<button class="danger" data-action="deleteBranch" data-name="' + safeName + '" data-force="false">Delete</button>';
             }
             h += '</span></div>';
         }
@@ -1166,9 +1318,10 @@ function renderBranchList(branches) {
     if (remote.length) {
         h += '<div class="section-title" style="margin-top:8px">REMOTE BRANCHES</div>';
         for (const b of remote) {
+            const safeName = escH(b.name);
             h += '<div class="branch-item">';
-            h += '<span class="branch-name" style="color:var(--vscode-descriptionForeground)">' + escH(b.name) + '</span>';
-            h += '<span class="item-actions"><button onclick="doCheckout(\''+ea(b.name)+'\')">Checkout</button></span>';
+            h += '<span class="branch-name" style="color:var(--vscode-descriptionForeground)">' + safeName + '</span>';
+            h += '<span class="item-actions"><button data-action="checkout" data-name="' + safeName + '">Checkout</button></span>';
             h += '</div>';
         }
     }
@@ -1191,8 +1344,9 @@ function renderContributorList(contribs) {
     for (const c of contribs) {
         const pct = Math.round((c.commitCount / maxC) * 100);
         const isA = activeAuthor === c.name;
-        h += '<div class="contributor-item" onclick="filterByAuthor(\''+ea(c.name)+'\')" style="' + (isA ? 'background:var(--vscode-list-activeSelectionBackground);' : '') + 'cursor:pointer">';
-        h += '<span style="flex:0 0 auto;font-size:12px;margin-right:4px">' + escH(c.name) + '</span>';
+        const safeName = escH(c.name);
+        h += '<div class="contributor-item" data-author="' + safeName + '" style="' + (isA ? 'background:var(--vscode-list-activeSelectionBackground);' : '') + 'cursor:pointer">';
+        h += '<span style="flex:0 0 auto;font-size:12px;margin-right:4px">' + safeName + '</span>';
         h += '<div class="contributor-bar-wrap"><div class="contributor-bar" style="width:' + pct + '%"></div></div>';
         h += '<span class="contributor-count">' + c.commitCount + '</span>';
         h += '</div>';
@@ -1204,10 +1358,16 @@ function loadStashes() {
     document.getElementById('stash-list-content').innerHTML = '<div style="color:var(--vscode-descriptionForeground);padding:4px">Loading...</div>';
     vscode.postMessage({ type: 'requestStashes' });
 }
+function toggleStashForm() {
+    const f = document.getElementById('create-stash-form');
+    f.style.display = f.style.display === 'none' ? '' : 'none';
+    if (f.style.display !== 'none') { document.getElementById('new-stash-message').focus(); }
+}
 function doCreateStash() {
-    const msg = prompt('Stash message (optional):');
-    if (msg === null) return;
+    const msg = document.getElementById('new-stash-message').value.trim();
     vscode.postMessage({ type: 'createStash', message: msg || undefined });
+    document.getElementById('new-stash-message').value = '';
+    toggleStashForm();
 }
 function renderStashList(stashes) {
     const el = document.getElementById('stash-list-content');
@@ -1222,9 +1382,9 @@ function renderStashList(stashes) {
         h += '<span style="color:var(--vscode-textLink-foreground)">' + escH(s.ref) + '</span> ' + escH(s.message);
         h += '<br><span style="font-size:10px;color:var(--vscode-descriptionForeground)">' + escH(s.authorName) + ' &middot; ' + relDate(s.date) + (s.branch ? ' &middot; on ' + escH(s.branch) : '') + '</span>';
         h += '</span><span class="item-actions">';
-        h += '<button onclick="vscode.postMessage({type:\'applyStash\',index:' + s.index + '})">Apply</button>';
-        h += '<button onclick="vscode.postMessage({type:\'popStash\',index:'   + s.index + '})">Pop</button>';
-        h += '<button class="danger" onclick="vscode.postMessage({type:\'dropStash\',index:' + s.index + '})">Drop</button>';
+        h += '<button data-action="applyStash" data-index="' + s.index + '">Apply</button>';
+        h += '<button data-action="popStash"   data-index="' + s.index + '">Pop</button>';
+        h += '<button class="danger" data-action="dropStash" data-index="' + s.index + '">Drop</button>';
         h += '</span></div>';
     }
     el.innerHTML = h;
@@ -1243,13 +1403,14 @@ function renderRemoteList(remotes) {
     }
     let h = '<div class="section-title">REMOTES</div>';
     for (const r of remotes) {
+        const safeRemote = escH(r.name);
         h += '<div class="remote-item">';
-        h += '<span style="flex:1;overflow:hidden"><strong>' + escH(r.name) + '</strong><br>';
+        h += '<span style="flex:1;overflow:hidden"><strong>' + safeRemote + '</strong><br>';
         h += '<span style="font-size:10px;color:var(--vscode-descriptionForeground)">' + escH(r.fetchUrl) + '</span></span>';
         h += '<span class="item-actions">';
-        h += '<button onclick="vscode.postMessage({type:\'fetchRemote\',remote:\''+ea(r.name)+'\'})">Fetch</button>';
-        h += '<button onclick="vscode.postMessage({type:\'pullBranch\',remote:\''+ea(r.name)+'\',branch:\'\',rebase:false})">Pull</button>';
-        h += '<button onclick="vscode.postMessage({type:\'pushBranch\',remote:\''+ea(r.name)+'\',branch:\'\',force:false})">Push</button>';
+        h += '<button data-action="fetchRemote" data-remote="' + safeRemote + '">Fetch</button>';
+        h += '<button data-action="pullBranch"  data-remote="' + safeRemote + '">Pull</button>';
+        h += '<button data-action="pushBranch"  data-remote="' + safeRemote + '">Push</button>';
         h += '</span></div>';
     }
     el.innerHTML = h;
@@ -1273,7 +1434,6 @@ function relDate(ds) {
 function escH(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function ea(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 </script>
 </body>
 </html>`;

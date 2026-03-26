@@ -15,6 +15,7 @@ import { getLanguageDisplayName, getNextLanguage, getNotificationLevelDisplayNam
 import { GitGraphTreeProvider, GitGraphTreeItem } from './gitGraphTreeProvider';
 import { GitGraphWebviewManager } from './gitGraphWebview';
 import { BlameDecorator } from './blameDecorator';
+import { ProjectVerifier } from './verification';
 
 /**
  * Smart Notification Manager
@@ -179,6 +180,7 @@ let gitGraphWebview: GitGraphWebviewManager;
 let blameDecorator: BlameDecorator;
 let guardianMainStatusBarItem: vscode.StatusBarItem;
 let guardianInfoStatusBarItem: vscode.StatusBarItem;
+let guardianGroupManagementStatusBarItem: vscode.StatusBarItem; // New: dedicated group management button
 
 async function syncSettingsFromConfiguration(): Promise<void> {
     const config = vscode.workspace.getConfiguration('vibeCodeGuardian');
@@ -1824,6 +1826,21 @@ function registerCommands(context: vscode.ExtensionContext) {
             updateGuardianInfoStatusBar();
         })
     );
+
+    // ── Verification Commands ─────────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.runVerification', async () => {
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            if (!workspaceFolder) {
+                vscode.window.showErrorMessage('No workspace folder found for verification.');
+                return;
+            }
+
+            const verifier = new ProjectVerifier(gitManager);
+            const results = await verifier.runComprehensiveVerification();
+            ProjectVerifier.displayResults(results);
+        })
+    );
 }
 
 function setupEventListeners(context: vscode.ExtensionContext) {
@@ -1971,12 +1988,21 @@ function startAutoSaveTimer(context: vscode.ExtensionContext) {
  */
 function createGuardianStatusBars(context: vscode.ExtensionContext) {
     // Main button — left-most, always visible, opens the Guardian panel
-    guardianMainStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 102);
+    guardianMainStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 103);
     guardianMainStatusBarItem.command = 'vibeCodeGuardian.openGuardianPanel';
     guardianMainStatusBarItem.text = '$(shield) Guardian';
     guardianMainStatusBarItem.tooltip = 'Vibe Code Guardian — 点击展开功能面板';
     guardianMainStatusBarItem.show();
     context.subscriptions.push(guardianMainStatusBarItem);
+
+    // Group management button — dedicated for milestone/group management (default action)
+    guardianGroupManagementStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 102);
+    guardianGroupManagementStatusBarItem.command = 'vibeCodeGuardian.openGuardianPanel';
+    guardianGroupManagementStatusBarItem.text = '$(rocket) Groups';
+    guardianGroupManagementStatusBarItem.tooltip = 'Manage code groups & milestones (default action)';
+    updateGuardianGroupManagementStatusBar();
+    guardianGroupManagementStatusBarItem.show();
+    context.subscriptions.push(guardianGroupManagementStatusBarItem);
 
     // Info bar — shows active milestone name and tracking mode icon
     guardianInfoStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 101);
@@ -2006,6 +2032,30 @@ function updateGuardianInfoStatusBar(activeName?: string) {
     } else {
         guardianInfoStatusBarItem.text = `$(milestone) 无里程碑 ${trackingIcon}`;
         guardianInfoStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    }
+}
+
+/**
+ * Updates the group management status bar item with current status.
+ */
+function updateGuardianGroupManagementStatusBar(activeName?: string) {
+    if (!guardianGroupManagementStatusBarItem) { return; }
+    const name = activeName ?? checkpointManager?.getActiveMilestone()?.name;
+    const settings = checkpointManager?.getSettings();
+    const milestoneEnabled = settings?.milestoneEnabled ?? true;
+
+    if (name) {
+        guardianGroupManagementStatusBarItem.text = `$(rocket) ${name}`;
+        guardianGroupManagementStatusBarItem.tooltip = `Active: ${name} — Manage groups & milestones`;
+        guardianGroupManagementStatusBarItem.backgroundColor = undefined;
+    } else if (!milestoneEnabled) {
+        guardianGroupManagementStatusBarItem.text = '$(rocket) Groups (OFF)';
+        guardianGroupManagementStatusBarItem.tooltip = 'Milestone tracking disabled — Manage groups & milestones';
+        guardianGroupManagementStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    } else {
+        guardianGroupManagementStatusBarItem.text = '$(rocket) No Group';
+        guardianGroupManagementStatusBarItem.tooltip = 'No active milestone — Start new group';
+        guardianGroupManagementStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     }
 }
 

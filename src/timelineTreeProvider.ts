@@ -61,8 +61,27 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         if (element.contextValue === 'session') {
             // Show checkpoints in this session
             const checkpoints = this.checkpointManager.getCheckpoints()
-                .filter(cp => cp.sessionId === element.sessionId);
+                .filter(cp => cp.sessionId === element.sessionId)
+                .sort((a, b) => b.timestamp - a.timestamp);
             return Promise.resolve(checkpoints.map(cp => this.createCheckpointItem(cp)));
+        }
+
+        if (element.contextValue === 'orphan-group') {
+            // Show all untracked checkpoints sorted newest-first
+            const orphaned = this.checkpointManager.getCheckpoints()
+                .filter(cp => !cp.milestoneId)
+                .sort((a, b) => b.timestamp - a.timestamp);
+            return Promise.resolve(orphaned.map(cp => this.createCheckpointItem(cp)));
+        }
+
+        if (element.contextValue === 'date-group') {
+            // Show checkpoints for this specific date
+            const dateKey = element.dateKey;
+            if (!dateKey) { return Promise.resolve([]); }
+            const filtered = this.checkpointManager.getCheckpoints()
+                .filter(cp => new Date(cp.timestamp).toLocaleDateString('zh-CN') === dateKey)
+                .sort((a, b) => b.timestamp - a.timestamp);
+            return Promise.resolve(filtered.map(cp => this.createCheckpointItem(cp)));
         }
 
         if (element.contextValue === 'checkpoint') {
@@ -98,7 +117,7 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
                 const orphaned = this.checkpointManager.getCheckpoints()
                     .filter(cp => !cp.milestoneId);
                 if (orphaned.length > 0) {
-                    const group = this.createOrphanGroup(orphaned.length);
+                    const group = this.createOrphanGroup(orphaned);
                     items.push(group);
                 }
                 break;
@@ -316,10 +335,20 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         return `${start} – ${end}`;
     }
 
-    private createOrphanGroup(count: number): TimelineItem {        const item = new TimelineItem(
-            '📋 Untracked checkpoints',
-            `${count} checkpoints without a milestone`,
-            vscode.TreeItemCollapsibleState.Collapsed
+    private createOrphanGroup(orphaned: Checkpoint[]): TimelineItem {
+        const sorted = [...orphaned].sort((a, b) => b.timestamp - a.timestamp);
+        const count = sorted.length;
+        const lastSave = sorted.length > 0 ? this.relativeTime(sorted[0].timestamp) : '';
+        const totalFiles = sorted.reduce((s, cp) => s + cp.changedFiles.length, 0);
+        const fileStr = totalFiles > 0 ? ` · ${totalFiles} files` : '';
+        const lastStr = lastSave ? ` · last ${lastSave}` : '';
+
+        const item = new TimelineItem(
+            '📋 Untracked',
+            `${count} saves${fileStr}${lastStr}`,
+            count <= 10
+                ? vscode.TreeItemCollapsibleState.Expanded
+                : vscode.TreeItemCollapsibleState.Collapsed
         );
         item.contextValue = 'orphan-group';
         item.iconPath = new vscode.ThemeIcon('history');
@@ -379,19 +408,25 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
     }
 
     private createCheckpointItem(checkpoint: Checkpoint): TimelineItem {
-        const time = new Date(checkpoint.timestamp).toLocaleTimeString('zh-CN', {
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-        
+        const sourceEmoji = this.getSourceEmoji(checkpoint.source);
+        const relTime = this.relativeTime(checkpoint.timestamp);
         const filesCount = checkpoint.changedFiles.length;
-        const filesLabel = filesCount > 0 ? `${filesCount} files` : 'snapshot';
-        
-        const description = `${time} • ${filesLabel}`;
-        
-        const hasFiles = checkpoint.changedFiles.length > 0;
+
+        // Aggregate lines changed across all changed files
+        const linesAdded   = checkpoint.changedFiles.reduce((s, f) => s + (f.linesAdded   ?? 0), 0);
+        const linesRemoved = checkpoint.changedFiles.reduce((s, f) => s + (f.linesRemoved ?? 0), 0);
+        const linesStr = (linesAdded > 0 || linesRemoved > 0)
+            ? ` +${linesAdded}/-${linesRemoved}`
+            : '';
+        const filesStr = filesCount > 0 ? `${filesCount}f${linesStr}` : 'snapshot';
+
+        const description = `${relTime} · ${filesStr}`;
+        // Prefix label with source emoji so the icon column carries type and label shows origin
+        const label = `${sourceEmoji} ${checkpoint.name}`;
+
+        const hasFiles = filesCount > 0;
         const item = new TimelineItem(
-            checkpoint.name,
+            label,
             description,
             hasFiles ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
         );
@@ -399,11 +434,7 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         item.contextValue = checkpoint.starred ? 'checkpoint-starred' : 'checkpoint';
         item.checkpointId = checkpoint.id;
         item.iconPath = this.getCheckpointIcon(checkpoint);
-        
-        // Add tooltip
         item.tooltip = this.createTooltip(checkpoint);
-
-        // Command to show details
         item.command = {
             command: 'vibeCodeGuardian.showCheckpointDetails',
             title: 'Show Details',
@@ -434,12 +465,17 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
     }
 
     private createDateGroup(date: string, count: number): TimelineItem {
+        const todayStr     = new Date().toLocaleDateString('zh-CN');
+        const yesterdayStr = new Date(Date.now() - 86_400_000).toLocaleDateString('zh-CN');
+        const displayDate  = date === todayStr ? '今日' : date === yesterdayStr ? '昨日' : date;
+
         const item = new TimelineItem(
-            `📅 ${date}`,
+            `📅 ${displayDate}`,
             `${count} checkpoints`,
             vscode.TreeItemCollapsibleState.Collapsed
         );
         item.contextValue = 'date-group';
+        item.dateKey = date;
         return item;
     }
 
@@ -519,6 +555,18 @@ export class TimelineTreeProvider implements vscode.TreeDataProvider<TimelineIte
         return groups;
     }
 
+    private relativeTime(timestamp: number): string {
+        const ms  = Date.now() - timestamp;
+        const s   = Math.floor(ms / 1000);
+        const m   = Math.floor(s / 60);
+        const h   = Math.floor(m / 60);
+        const d   = Math.floor(h / 24);
+        if (d > 0) { return `${d}d ago`; }
+        if (h > 0) { return `${h}h ago`; }
+        if (m > 0) { return `${m}m ago`; }
+        return 'just now';
+    }
+
     private formatDuration(ms: number): string {
         const seconds = Math.floor(ms / 1000);
         const minutes = Math.floor(seconds / 60);
@@ -539,6 +587,7 @@ export class TimelineItem extends vscode.TreeItem {
     public checkpointId?: string;
     public milestoneId?: string;
     public promptGroupId?: string;
+    public dateKey?: string;
     
     constructor(
         public readonly label: string,

@@ -329,6 +329,14 @@ export interface GitGraphData {
     currentBranch?: string;
     totalLanes: number;
     mode: 'guardian' | 'full';
+    /** Multi-user data for enhanced display */
+    contributors?: GitContributor[];
+    /** Stash list for enhanced git operations */
+    stashes?: GitStash[];
+    /** Remote repositories for enhanced git management */
+    remotes?: GitRemote[];
+    /** Detailed branch information with tracking status */
+    branchDetails?: GitBranchDetail[];
 }
 
 /** Represents changed files in a commit (for WebView detail panel) */
