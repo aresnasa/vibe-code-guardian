@@ -44,7 +44,7 @@ WASM_TARGET="wasm32-wasip1"
 # ── Parse CLI arguments ──────────────────────────────────────────────────────
 MODE="${1:-build}"
 VERSION_BUMP="${2:-patch}"
-SKIP_ZED=false
+SKIP_ZED=true   # Zed publishing disabled until MrSubidubi review resolved
 SKIP_VSCODE=false
 HARD_RESET=false
 DRY_RUN=false
@@ -541,8 +541,9 @@ zed_create_pr() {
     git push origin "$pr_branch" --force
 
     # ── Create PR via gh CLI ──────────────────────────────────────────────
-    local pr_url
-    pr_url=$(gh pr create \
+    local pr_output
+    local pr_exit_code
+    pr_output=$(gh pr create \
         --repo "$ZED_EXTENSIONS_UPSTREAM" \
         --base main \
         --head "aresnasa:${pr_branch}" \
@@ -570,16 +571,31 @@ A game-like checkpoint/save system for AI-assisted coding (vibe coding).
 - [x] MIT license included
 - [x] Extension compiles to wasm32-wasip1
 - [x] \`extensions.toml\` version matches \`extension.toml\`
-- [x] Extension ID does not contain \"zed\"" 2>&1)
-
-    log_success "PR created: ${pr_url}"
+- [x] Extension ID does not contain \"zed\"" 2>&1) || pr_exit_code=$?
 
     popd > /dev/null
     rm -rf "$work_dir"
 
-    echo ""
-    log_info "PR URL: ${pr_url}"
-    log_info "Once merged, users can install via Zed Extensions panel."
+    # Check if PR creation succeeded (URL starts with https://)
+    if echo "$pr_output" | grep -q "^https://github.com/"; then
+        log_success "PR created: ${pr_output}"
+        echo ""
+        log_info "PR URL: ${pr_output}"
+        log_info "Once merged, users can install via Zed Extensions panel."
+    else
+        log_error "PR creation failed: ${pr_output}"
+        echo ""
+        log_warning "The branch was pushed to your fork successfully."
+        log_warning "Please create the PR manually:"
+        log_info "  https://github.com/${ZED_EXTENSIONS_FORK}/pull/new/${pr_branch}"
+        log_info "  → base: zed-industries/extensions:main"
+        log_info "  → compare: aresnasa:${pr_branch}"
+        echo ""
+        log_warning "If you are blocked by zed-industries, you need to:"
+        log_info "  1. Contact Zed team at https://github.com/zed-industries/extensions/issues"
+        log_info "  2. Or have another GitHub account not blocked submit the PR"
+        return 1
+    fi
 }
 
 # Orchestrate all Zed publish steps
