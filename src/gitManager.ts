@@ -901,6 +901,116 @@ public/bundles/
     }
 
     /**
+     * Get all remotes configured in .git/config
+     * Returns an array of remote names (e.g. ['origin', 'upstream', 'backup'])
+     */
+    public async getAllRemotes(): Promise<string[]> {
+        if (!this.git) {
+            return [];
+        }
+        try {
+            const remotes = await this.git.getRemotes(false);
+            return remotes.map(r => r.name);
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * One-click: git add . → git commit -m "<summary>" → git push <all remotes>
+     * Reads .git/config to discover all configured remotes and pushes to each.
+     * @param commitMessage Custom commit message. If omitted, a summary is generated from status.
+     * @returns Per-step result with details of what succeeded and what failed.
+     */
+    public async quickPushAll(commitMessage?: string): Promise<{
+        success: boolean;
+        added: boolean;
+        committed: boolean;
+        pushResults: Array<{ remote: string; success: boolean; message: string }>;
+        summary: string;
+    }> {
+        const result = {
+            success: false,
+            added: false,
+            committed: false,
+            pushResults: [] as Array<{ remote: string; success: boolean; message: string }>,
+            summary: ''
+        };
+
+        if (!this.git) {
+            result.summary = 'Git not initialized';
+            return result;
+        }
+
+        try {
+            // Step 1: git add .
+            await this.git.add('.');
+            result.added = true;
+
+            // Step 2: build commit message from status if not provided
+            const status = await this.git.status();
+            const totalChanged = status.modified.length + status.created.length +
+                status.deleted.length + status.renamed.length + status.not_added.length;
+
+            if (totalChanged === 0 && status.staged.length === 0) {
+                result.summary = '没有需要提交的更改';
+                result.success = true; // Nothing to do is not a failure
+                return result;
+            }
+
+            const message = commitMessage || this.buildQuickCommitMessage(status);
+
+            // Step 3: git commit
+            await this.git.commit(message);
+            result.committed = true;
+
+            // Step 4: discover all remotes from .git/config
+            const remotes = await this.getAllRemotes();
+            if (remotes.length === 0) {
+                result.summary = `已提交: "${message}"，但没有配置远端仓库`;
+                result.success = true;
+                return result;
+            }
+
+            // Step 5: push to every remote
+            const branch = await this.getCurrentBranch();
+            for (const remote of remotes) {
+                try {
+                    await this.git.push(remote, branch || 'HEAD');
+                    result.pushResults.push({ remote, success: true, message: `✓ ${remote}` });
+                } catch (pushErr) {
+                    const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
+                    result.pushResults.push({ remote, success: false, message: `✗ ${remote}: ${msg}` });
+                }
+            }
+
+            const allPushed = result.pushResults.every(r => r.success);
+            result.success = allPushed;
+            const pushSummary = result.pushResults.map(r => r.message).join(', ');
+            result.summary = `提交: "${message}" → 推送 [${pushSummary}]`;
+        } catch (error) {
+            const errMsg = error instanceof Error ? error.message : String(error);
+            result.summary = `操作失败: ${errMsg}`;
+        }
+
+        return result;
+    }
+
+    /**
+     * Generate a concise commit message from git status (used by quickPushAll)
+     */
+    private buildQuickCommitMessage(status: import('simple-git').StatusResult): string {
+        const parts: string[] = [];
+        if (status.modified.length > 0) { parts.push(`修改 ${status.modified.length} 个文件`); }
+        if (status.created.length + status.not_added.length > 0) {
+            parts.push(`新增 ${status.created.length + status.not_added.length} 个文件`);
+        }
+        if (status.deleted.length > 0) { parts.push(`删除 ${status.deleted.length} 个文件`); }
+        if (status.renamed.length > 0) { parts.push(`重命名 ${status.renamed.length} 个文件`); }
+        return parts.length > 0 ? parts.join('，') : '代码更新';
+    }
+
+    /**
      * Get list of changed files
      */
     public async getChangedFiles(): Promise<string[]> {

@@ -181,6 +181,7 @@ let blameDecorator: BlameDecorator;
 let guardianMainStatusBarItem: vscode.StatusBarItem;
 let guardianInfoStatusBarItem: vscode.StatusBarItem;
 let guardianGroupManagementStatusBarItem: vscode.StatusBarItem; // New: dedicated group management button
+let guardianQuickPushStatusBarItem: vscode.StatusBarItem; // One-click push to all remotes
 
 async function syncSettingsFromConfiguration(): Promise<void> {
     const config = vscode.workspace.getConfiguration('vibeCodeGuardian');
@@ -1827,6 +1828,63 @@ function registerCommands(context: vscode.ExtensionContext) {
         })
     );
 
+    // ── Quick Push All Remotes ─────────────────────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vibeCodeGuardian.quickPushAll', async () => {
+            // Reset notification throttle so the result is always visible
+            notificationManager.reset();
+
+            // Read all remotes upfront to show user what will be pushed
+            const remotes = await gitManager.getAllRemotes();
+
+            // Ask user for optional custom commit message
+            const defaultMsg = '';
+            const customMsg = await vscode.window.showInputBox({
+                title: '$(cloud-upload) 一键提交并推送到所有远端',
+                prompt: remotes.length > 0
+                    ? `将推送到远端: ${remotes.join(', ')}。留空则自动生成提交说明`
+                    : '未检测到远端仓库。提交后可手动添加远端再推送。',
+                placeHolder: '输入提交说明（留空自动生成）',
+                value: defaultMsg
+            });
+
+            // undefined means user cancelled
+            if (customMsg === undefined) { return; }
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: '$(cloud-upload) 正在执行 git add → commit → push …',
+                cancellable: false
+            }, async () => {
+                const result = await gitManager.quickPushAll(customMsg || undefined);
+
+                if (result.summary === '没有需要提交的更改') {
+                    vscode.window.showInformationMessage('$(check) 没有需要提交的更改');
+                    return;
+                }
+
+                if (result.success) {
+                    vscode.window.showInformationMessage(`$(check) ${result.summary}`);
+                } else {
+                    // Show failures prominently
+                    const failedRemotes = result.pushResults
+                        .filter(r => !r.success)
+                        .map(r => r.message)
+                        .join('\n');
+                    const committed = result.committed ? '提交成功' : '提交失败';
+                    vscode.window.showWarningMessage(
+                        `$(warning) ${committed}\n${failedRemotes || result.summary}`,
+                        '查看详情'
+                    ).then(sel => {
+                        if (sel === '查看详情') {
+                            vscode.window.showInformationMessage(result.summary, { modal: true });
+                        }
+                    });
+                }
+            });
+        })
+    );
+
     // ── Verification Commands ─────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('vibeCodeGuardian.runVerification', async () => {
@@ -2011,6 +2069,14 @@ function createGuardianStatusBars(context: vscode.ExtensionContext) {
     updateGuardianInfoStatusBar();
     guardianInfoStatusBarItem.show();
     context.subscriptions.push(guardianInfoStatusBarItem);
+
+    // Quick push button — one-click git add . && commit && push all remotes
+    guardianQuickPushStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    guardianQuickPushStatusBarItem.command = 'vibeCodeGuardian.quickPushAll';
+    guardianQuickPushStatusBarItem.text = '$(cloud-upload) Push All';
+    guardianQuickPushStatusBarItem.tooltip = '一键提交并推送到所有远端 (git add . → commit → push all remotes)';
+    guardianQuickPushStatusBarItem.show();
+    context.subscriptions.push(guardianQuickPushStatusBarItem);
 }
 
 /**
@@ -2097,6 +2163,14 @@ function showGuardianPanel() {
             description: milestoneDesc,
             action: 'abandonMilestone'
         },
+        // ── Git 操作 ──────────────────────────────────
+        { label: 'Git 操作', kind: vscode.QuickPickItemKind.Separator },
+        {
+            label: '$(cloud-upload) 一键提交并推送（所有远端）',
+            description: 'git add . → commit → push all remotes',
+            detail: '读取 .git/config 中所有远端仓库并一键推送',
+            action: 'quickPushAll'
+        },
         // ── 视图 ──────────────────────────────────────
         { label: '视图', kind: vscode.QuickPickItemKind.Separator },
         {
@@ -2168,6 +2242,9 @@ function showGuardianPanel() {
                 break;
             case 'abandonMilestone':
                 vscode.commands.executeCommand('vibeCodeGuardian.abandonMilestone');
+                break;
+            case 'quickPushAll':
+                vscode.commands.executeCommand('vibeCodeGuardian.quickPushAll');
                 break;
             case 'showTimeline':
                 vscode.commands.executeCommand('vibeCodeGuardian.showTimeline');
