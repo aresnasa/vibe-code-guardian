@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { GitManager } from './gitManager';
 import { GitGraphProvider } from './gitGraphProvider';
 import { WebviewToExtensionMessage } from './types';
+import { DiffContentProvider } from './rollbackManager';
 
 export class GitGraphWebviewManager {
     private panel: vscode.WebviewPanel | undefined;
@@ -126,12 +127,8 @@ export class GitGraphWebviewManager {
             }
             case 'requestFileDiff': {
                 try {
-                    const diff = await this.gitManager.getDiff(`${message.hash}^`, message.hash);
-                    const fileDiff = this.extractFileDiff(diff, message.filePath);
-                    this.panel?.webview.postMessage({
-                        type: 'diffContent',
-                        data: { filePath: message.filePath, diff: fileDiff }
-                    });
+                    // Open VS Code diff editor instead of inline webview preview
+                    await this.openVSCodeDiff(message.filePath, message.hash);
                 } catch (err) {
                     this.panel?.webview.postMessage({ type: 'error', message: String(err) });
                 }
@@ -367,14 +364,23 @@ export class GitGraphWebviewManager {
         const beforeContent = await this.gitManager.getFileAtCommit(absolutePath, parentCommit) ?? '';
         const afterContent = await this.gitManager.getFileAtCommit(absolutePath, commitHash) ?? '';
 
-        const beforeDoc = await vscode.workspace.openTextDocument({ content: beforeContent, language: filePath.split('.').pop() || 'plaintext' });
-        const afterDoc = await vscode.workspace.openTextDocument({ content: afterContent, language: filePath.split('.').pop() || 'plaintext' });
-
         const fileName = filePath.split('/').pop() || filePath;
         const shortHash = commitHash.substring(0, 8);
+        const timestamp = Date.now();
+
+        // Use virtual document URIs instead of untitled temp documents
+        const oldUri = vscode.Uri.parse(
+            `vibe-guardian-diff:/${timestamp}/old/${encodeURIComponent(fileName)}`
+        );
+        const newUri = vscode.Uri.parse(
+            `vibe-guardian-diff:/${timestamp}/new/${encodeURIComponent(fileName)}`
+        );
+
+        DiffContentProvider.setContent(oldUri.toString(), beforeContent);
+        DiffContentProvider.setContent(newUri.toString(), afterContent);
 
         await vscode.commands.executeCommand('vscode.diff',
-            beforeDoc.uri, afterDoc.uri,
+            oldUri, newUri,
             `${fileName} (${shortHash}~1 ↔ ${shortHash})`,
             { preview: true }
         );
@@ -388,12 +394,26 @@ export class GitGraphWebviewManager {
             ? filePath
             : vscode.Uri.joinPath(workspaceFolder.uri, filePath).fsPath;
 
+        // Try opening the actual workspace file first (current state)
+        try {
+            await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath));
+            await vscode.window.showTextDocument(vscode.Uri.file(absolutePath), { preview: true });
+            return;
+        } catch {
+            // File doesn't exist in current workspace state, fall through to virtual doc
+        }
+
+        // Show file content at the specific commit via virtual document (no temp files)
         const content = await this.gitManager.getFileAtCommit(absolutePath, commitHash);
-        if (content) {
-            const doc = await vscode.workspace.openTextDocument({
-                content,
-                language: filePath.split('.').pop() || 'plaintext'
-            });
+        if (content !== undefined) {
+            const fileName = filePath.split('/').pop() || filePath;
+            const shortHash = commitHash.substring(0, 8);
+            const timestamp = Date.now();
+            const uri = vscode.Uri.parse(
+                `vibe-guardian-diff:/${timestamp}/show/${encodeURIComponent(fileName)}`
+            );
+            DiffContentProvider.setContent(uri.toString(), content);
+            const doc = await vscode.workspace.openTextDocument(uri);
             await vscode.window.showTextDocument(doc, { preview: true });
         } else {
             vscode.window.showWarningMessage(`Could not retrieve file: ${filePath}`);
