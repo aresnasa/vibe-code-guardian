@@ -2,7 +2,7 @@
   "name": "vibe-code-guardian",
   "displayName": "Vibe Code Guardian",
   "description": "Game-like checkpoint system for AI-assisted coding - save, load, and rollback your vibe coding sessions",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "publisher": "vibe-coder",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -35,7 +35,12 @@
     "version control"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:vibeCodeGuardian.checkpointExplorer",
+    "onView:vibeCodeGuardian.gitGraph",
+    "onCommand:vibeCodeGuardian.showGitGraph",
+    "onCommand:vibeCodeGuardian.refreshGitGraph",
+    "onCommand:vibeCodeGuardian.toggleGitGraphMode"
   ],
   "main": "./dist/extension.js",
   "contributes": {
