@@ -183,6 +183,40 @@ let guardianInfoStatusBarItem: vscode.StatusBarItem;
 let guardianGroupManagementStatusBarItem: vscode.StatusBarItem; // New: dedicated group management button
 let guardianQuickPushStatusBarItem: vscode.StatusBarItem; // One-click push to all remotes
 
+export const GUARDIAN_STATUS_BAR_BUTTON_COMMANDS = {
+    main: 'vibeCodeGuardian.openGuardianPanel',
+    groups: 'vibeCodeGuardian.openGuardianPanel',
+    info: 'vibeCodeGuardian.openGuardianPanel',
+    quickPush: 'vibeCodeGuardian.quickPushAll'
+} as const;
+
+const GUARDIAN_PANEL_ACTION_COMMANDS: Record<string, string> = {
+    startMilestone: 'vibeCodeGuardian.startMilestone',
+    completeMilestone: 'vibeCodeGuardian.completeMilestone',
+    abandonMilestone: 'vibeCodeGuardian.abandonMilestone',
+    quickPushAll: 'vibeCodeGuardian.quickPushAll',
+    showTimeline: 'vibeCodeGuardian.showTimeline',
+    showGitGraph: 'vibeCodeGuardian.showGitGraph',
+    showMilestones: 'vibeCodeGuardian.showMilestones',
+    toggleTracking: 'vibeCodeGuardian.toggleTrackingMode',
+    toggleNotification: 'vibeCodeGuardian.toggleNotificationLevel',
+    togglePush: 'vibeCodeGuardian.togglePushStrategy',
+    toggleLanguage: 'vibeCodeGuardian.toggleCommitLanguage',
+    toggleMilestone: 'vibeCodeGuardian.toggleMilestone',
+    toggleBlame: 'vibeCodeGuardian.toggleBlame'
+};
+
+export function getGuardianPanelActionCommandMap(): Readonly<Record<string, string>> {
+    return GUARDIAN_PANEL_ACTION_COMMANDS;
+}
+
+export async function dispatchGuardianPanelAction(action?: string): Promise<void> {
+    if (!action) { return; }
+    const command = GUARDIAN_PANEL_ACTION_COMMANDS[action];
+    if (!command) { return; }
+    await vscode.commands.executeCommand(command);
+}
+
 async function syncSettingsFromConfiguration(): Promise<void> {
     const config = vscode.workspace.getConfiguration('vibeCodeGuardian');
     const autoSaveEnabled = config.get<boolean>('autoSaveEnabled', true);
@@ -2047,7 +2081,7 @@ function startAutoSaveTimer(context: vscode.ExtensionContext) {
 function createGuardianStatusBars(context: vscode.ExtensionContext) {
     // Main button — left-most, always visible, opens the Guardian panel
     guardianMainStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 103);
-    guardianMainStatusBarItem.command = 'vibeCodeGuardian.openGuardianPanel';
+    guardianMainStatusBarItem.command = GUARDIAN_STATUS_BAR_BUTTON_COMMANDS.main;
     guardianMainStatusBarItem.text = '$(shield) Guardian';
     guardianMainStatusBarItem.tooltip = 'Vibe Code Guardian — 点击展开功能面板';
     guardianMainStatusBarItem.show();
@@ -2055,7 +2089,7 @@ function createGuardianStatusBars(context: vscode.ExtensionContext) {
 
     // Group management button — dedicated for milestone/group management (default action)
     guardianGroupManagementStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 102);
-    guardianGroupManagementStatusBarItem.command = 'vibeCodeGuardian.openGuardianPanel';
+    guardianGroupManagementStatusBarItem.command = GUARDIAN_STATUS_BAR_BUTTON_COMMANDS.groups;
     guardianGroupManagementStatusBarItem.text = '$(rocket) Groups';
     guardianGroupManagementStatusBarItem.tooltip = 'Manage code groups & milestones (default action)';
     updateGuardianGroupManagementStatusBar();
@@ -2064,7 +2098,7 @@ function createGuardianStatusBars(context: vscode.ExtensionContext) {
 
     // Info bar — shows active milestone name and tracking mode icon
     guardianInfoStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 101);
-    guardianInfoStatusBarItem.command = 'vibeCodeGuardian.openGuardianPanel';
+    guardianInfoStatusBarItem.command = GUARDIAN_STATUS_BAR_BUTTON_COMMANDS.info;
     guardianInfoStatusBarItem.tooltip = '当前里程碑 — 点击展开功能面板';
     updateGuardianInfoStatusBar();
     guardianInfoStatusBarItem.show();
@@ -2072,7 +2106,7 @@ function createGuardianStatusBars(context: vscode.ExtensionContext) {
 
     // Quick push button — one-click git add . && commit && push all remotes
     guardianQuickPushStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    guardianQuickPushStatusBarItem.command = 'vibeCodeGuardian.quickPushAll';
+    guardianQuickPushStatusBarItem.command = GUARDIAN_STATUS_BAR_BUTTON_COMMANDS.quickPush;
     guardianQuickPushStatusBarItem.text = '$(cloud-upload) Push All';
     guardianQuickPushStatusBarItem.tooltip = '一键提交并推送到所有远端 (git add . → commit → push all remotes)';
     guardianQuickPushStatusBarItem.show();
@@ -2232,48 +2266,7 @@ function showGuardianPanel() {
         placeHolder: '选择操作...',
         matchOnDescription: true
     }).then(selected => {
-        if (!selected?.action) { return; }
-        switch (selected.action) {
-            case 'startMilestone':
-                vscode.commands.executeCommand('vibeCodeGuardian.startMilestone');
-                break;
-            case 'completeMilestone':
-                vscode.commands.executeCommand('vibeCodeGuardian.completeMilestone');
-                break;
-            case 'abandonMilestone':
-                vscode.commands.executeCommand('vibeCodeGuardian.abandonMilestone');
-                break;
-            case 'quickPushAll':
-                vscode.commands.executeCommand('vibeCodeGuardian.quickPushAll');
-                break;
-            case 'showTimeline':
-                vscode.commands.executeCommand('vibeCodeGuardian.showTimeline');
-                break;
-            case 'showGitGraph':
-                vscode.commands.executeCommand('vibeCodeGuardian.showGitGraph');
-                break;
-            case 'showMilestones':
-                vscode.commands.executeCommand('vibeCodeGuardian.showMilestones');
-                break;
-            case 'toggleTracking':
-                vscode.commands.executeCommand('vibeCodeGuardian.toggleTrackingMode');
-                break;
-            case 'toggleNotification':
-                vscode.commands.executeCommand('vibeCodeGuardian.toggleNotificationLevel');
-                break;
-            case 'togglePush':
-                vscode.commands.executeCommand('vibeCodeGuardian.togglePushStrategy');
-                break;
-            case 'toggleLanguage':
-                vscode.commands.executeCommand('vibeCodeGuardian.toggleCommitLanguage');
-                break;
-            case 'toggleMilestone':
-                vscode.commands.executeCommand('vibeCodeGuardian.toggleMilestone');
-                break;
-            case 'toggleBlame':
-                vscode.commands.executeCommand('vibeCodeGuardian.toggleBlame');
-                break;
-        }
+        void dispatchGuardianPanelAction(selected?.action);
     });
 }
 

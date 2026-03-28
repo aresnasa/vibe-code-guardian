@@ -2,7 +2,7 @@
   "name": "vibe-code-guardian",
   "displayName": "Vibe Code Guardian",
   "description": "Game-like checkpoint system for AI-assisted coding - save, load, and rollback your vibe coding sessions",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "publisher": "vibe-coder",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -357,6 +357,12 @@
         "command": "vibeCodeGuardian.quickPushAll",
         "title": "Quick Push — Add, Commit & Push to All Remotes",
         "icon": "$(cloud-upload)",
+        "category": "Vibe Guardian"
+      },
+      {
+        "command": "vibeCodeGuardian.openGuardianPanel",
+        "title": "Open Guardian Panel",
+        "icon": "$(shield)",
         "category": "Vibe Guardian"
       }
     ],

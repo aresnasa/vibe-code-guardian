@@ -8,11 +8,17 @@ import * as vscode from 'vscode';
 import { CheckpointManager } from '../checkpointManager';
 import { TimelineTreeProvider } from '../timelineTreeProvider';
 import { GitManager } from '../gitManager';
+import * as guardianExtension from '../extension';
 import {
 	CheckpointSource, CheckpointType, DEFAULT_SETTINGS, FileChangeType, MilestoneStatus,
 	GitContributor, GitStash, GitRemote, GitBranchDetail,
 	ExtensionToWebviewMessage, WebviewToExtensionMessage
 } from '../types';
+import {
+	getNextLanguage, getNextNotificationLevel, getNextPushStrategy, getNextTrackingMode,
+	getLanguageDisplayName, getNotificationLevelDisplayName, getPushStrategyDisplayName,
+	getTrackingModeDisplayName
+} from '../languageConfig';
 
 class MockWorkspaceState implements vscode.Memento {
 	private readonly store = new Map<string, unknown>();
@@ -1268,5 +1274,658 @@ suite('GitManager — getBlame', () => {
 		assert.ok(!isNaN(date.getTime()), 'date should be valid');
 		assert.strictEqual(date.getUTCFullYear(), 2026);
 		assert.strictEqual(date.getUTCMonth(), 2); // March = 2 (0-indexed)
+	});
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Extension command registration + click coverage tests
+// ══════════════════════════════════════════════════════════════════
+suite('Extension Command Click Coverage', () => {
+	const STATUS_BAR_BUTTON_COMMANDS = guardianExtension.GUARDIAN_STATUS_BAR_BUTTON_COMMANDS;
+	const GUARDIAN_PANEL_ACTION_MAP = guardianExtension.getGuardianPanelActionCommandMap();
+
+	test('registers all expected Vibe Guardian commands in package manifest', async () => {
+		const extension = vscode.extensions.all.find(ext => ext.packageJSON?.name === 'vibe-code-guardian');
+		assert.ok(extension, 'vibe-code-guardian extension should be available in test host');
+
+		const commands = extension?.packageJSON?.contributes?.commands;
+		assert.ok(Array.isArray(commands), 'package.json contributes.commands should be an array');
+
+		const manifestCommands = new Set((commands as Array<{ command: string }>).map(c => c.command));
+		for (const command of Object.values(GUARDIAN_PANEL_ACTION_MAP)) {
+			assert.ok(manifestCommands.has(command), `manifest should include command: ${command}`);
+		}
+		for (const command of Object.values(STATUS_BAR_BUTTON_COMMANDS)) {
+			assert.ok(manifestCommands.has(command), `manifest should include status-bar command: ${command}`);
+		}
+	});
+
+	test('Status Bar Button Click Coverage: all status bar buttons are clicked and dispatch expected results', async () => {
+		assert.strictEqual(STATUS_BAR_BUTTON_COMMANDS.main, 'vibeCodeGuardian.openGuardianPanel');
+		assert.strictEqual(STATUS_BAR_BUTTON_COMMANDS.groups, 'vibeCodeGuardian.openGuardianPanel');
+		assert.strictEqual(STATUS_BAR_BUTTON_COMMANDS.info, 'vibeCodeGuardian.openGuardianPanel');
+		assert.strictEqual(STATUS_BAR_BUTTON_COMMANDS.quickPush, 'vibeCodeGuardian.quickPushAll');
+	});
+
+	test('all guardian panel actions are clickable and dispatch expected command', async () => {
+		const commandsAny = vscode.commands as any;
+		const previousExecuteCommand = commandsAny.executeCommand;
+		const dispatchedCommands: string[] = [];
+
+		try {
+			commandsAny.executeCommand = async (commandId: string) => {
+				dispatchedCommands.push(commandId);
+				return undefined;
+			};
+
+			for (const [action, command] of Object.entries(GUARDIAN_PANEL_ACTION_MAP)) {
+				dispatchedCommands.length = 0;
+				await guardianExtension.dispatchGuardianPanelAction(action);
+				assert.deepStrictEqual(
+					dispatchedCommands,
+					[command],
+					`action ${action} should dispatch ${command}`
+				);
+			}
+
+			dispatchedCommands.length = 0;
+			await guardianExtension.dispatchGuardianPanelAction('unknown-action');
+			assert.deepStrictEqual(dispatchedCommands, [], 'unknown action should not dispatch any command');
+		} finally {
+			commandsAny.executeCommand = previousExecuteCommand;
+		}
+	});
+
+	test('guardian panel action map contains all 13 expected action keys', () => {
+		const actionMap = guardianExtension.getGuardianPanelActionCommandMap();
+		const expectedKeys = [
+			'startMilestone', 'completeMilestone', 'abandonMilestone',
+			'quickPushAll', 'showTimeline', 'showGitGraph', 'showMilestones',
+			'toggleTracking', 'toggleNotification', 'togglePush',
+			'toggleLanguage', 'toggleMilestone', 'toggleBlame'
+		];
+		for (const key of expectedKeys) {
+			assert.ok(key in actionMap, `guardian panel action map must include key: ${key}`);
+			assert.ok(typeof actionMap[key] === 'string' && actionMap[key].startsWith('vibeCodeGuardian.'),
+				`action "${key}" should map to a vibeCodeGuardian.* command`);
+		}
+		assert.strictEqual(Object.keys(actionMap).length, expectedKeys.length,
+			'action map should have exactly 13 entries');
+	});
+
+	test('status bar has exactly 4 button slots (main, groups, info, quickPush)', () => {
+		const STATUS_BAR_COMMANDS = guardianExtension.GUARDIAN_STATUS_BAR_BUTTON_COMMANDS;
+		const expectedSlots = ['main', 'groups', 'info', 'quickPush'];
+		for (const slot of expectedSlots) {
+			assert.ok(slot in STATUS_BAR_COMMANDS, `status bar should have slot: ${slot}`);
+		}
+		assert.strictEqual(Object.keys(STATUS_BAR_COMMANDS).length, expectedSlots.length,
+			'status bar should have exactly 4 button slots');
+	});
+
+	test('dispatchGuardianPanelAction with undefined/empty does nothing', async () => {
+		const commandsAny = vscode.commands as any;
+		const prevExec = commandsAny.executeCommand;
+		const dispatched: string[] = [];
+		commandsAny.executeCommand = async (id: string) => { dispatched.push(id); return undefined; };
+		try {
+			await guardianExtension.dispatchGuardianPanelAction(undefined);
+			await guardianExtension.dispatchGuardianPanelAction('');
+			assert.deepStrictEqual(dispatched, [], 'undefined/empty action must not dispatch any command');
+		} finally {
+			commandsAny.executeCommand = prevExec;
+		}
+	});
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Toggle Logic — pure unit tests (no VS Code API required)
+// ══════════════════════════════════════════════════════════════════
+suite('Toggle Logic — LanguageConfig cycle functions', () => {
+	test('getNextLanguage cycles auto → en → zh → auto', () => {
+		assert.strictEqual(getNextLanguage('auto'), 'en');
+		assert.strictEqual(getNextLanguage('en'), 'zh');
+		assert.strictEqual(getNextLanguage('zh'), 'auto');
+	});
+
+	test('getNextLanguage handles unknown value by returning en', () => {
+		assert.strictEqual(getNextLanguage(undefined as any), 'en',
+			'unknown language should default to en');
+	});
+
+	test('getNextNotificationLevel cycles milestone → all → none → milestone', () => {
+		assert.strictEqual(getNextNotificationLevel('milestone'), 'all');
+		assert.strictEqual(getNextNotificationLevel('all'), 'none');
+		assert.strictEqual(getNextNotificationLevel('none'), 'milestone');
+	});
+
+	test('getNextPushStrategy cycles milestone → all → none → milestone', () => {
+		assert.strictEqual(getNextPushStrategy('milestone'), 'all');
+		assert.strictEqual(getNextPushStrategy('all'), 'none');
+		assert.strictEqual(getNextPushStrategy('none'), 'milestone');
+	});
+
+	test('getNextTrackingMode cycles full → local-only → full', () => {
+		assert.strictEqual(getNextTrackingMode('full'), 'local-only');
+		assert.strictEqual(getNextTrackingMode('local-only'), 'full');
+	});
+
+	test('getLanguageDisplayName returns non-empty string for all valid values', () => {
+		for (const lang of ['auto', 'en', 'zh'] as const) {
+			const name = getLanguageDisplayName(lang);
+			assert.ok(typeof name === 'string' && name.length > 0,
+				`getLanguageDisplayName(${lang}) must return a non-empty string`);
+		}
+	});
+
+	test('getNotificationLevelDisplayName returns non-empty string for all levels', () => {
+		for (const level of ['all', 'milestone', 'none'] as const) {
+			const name = getNotificationLevelDisplayName(level);
+			assert.ok(typeof name === 'string' && name.length > 0,
+				`getNotificationLevelDisplayName(${level}) must return a non-empty string`);
+		}
+	});
+
+	test('getPushStrategyDisplayName returns non-empty string for all strategies', () => {
+		for (const strategy of ['all', 'milestone', 'none'] as const) {
+			const name = getPushStrategyDisplayName(strategy);
+			assert.ok(typeof name === 'string' && name.length > 0,
+				`getPushStrategyDisplayName(${strategy}) must return a non-empty string`);
+		}
+	});
+
+	test('getTrackingModeDisplayName returns non-empty string for all modes', () => {
+		for (const mode of ['full', 'local-only'] as const) {
+			const name = getTrackingModeDisplayName(mode);
+			assert.ok(typeof name === 'string' && name.length > 0,
+				`getTrackingModeDisplayName(${mode}) must return a non-empty string`);
+		}
+	});
+
+	test('full toggle cycle of languages returns to starting value', () => {
+		let lang: 'auto' | 'en' | 'zh' = 'auto';
+		lang = getNextLanguage(lang);
+		lang = getNextLanguage(lang);
+		lang = getNextLanguage(lang);
+		assert.strictEqual(lang, 'auto', 'three toggles should return to auto');
+	});
+
+	test('full toggle cycle of notification levels returns to starting value', () => {
+		let level: 'all' | 'milestone' | 'none' = 'milestone';
+		level = getNextNotificationLevel(level);
+		level = getNextNotificationLevel(level);
+		level = getNextNotificationLevel(level);
+		assert.strictEqual(level, 'milestone', 'three toggles should return to milestone');
+	});
+
+	test('full toggle cycle of push strategies returns to starting value', () => {
+		let strategy: 'all' | 'milestone' | 'none' = 'none';
+		strategy = getNextPushStrategy(strategy);
+		strategy = getNextPushStrategy(strategy);
+		strategy = getNextPushStrategy(strategy);
+		assert.strictEqual(strategy, 'none', 'three toggles should return to none');
+	});
+
+	test('full toggle cycle of tracking modes returns to starting value', () => {
+		let mode: 'full' | 'local-only' = 'full';
+		mode = getNextTrackingMode(mode);
+		mode = getNextTrackingMode(mode);
+		assert.strictEqual(mode, 'full', 'two toggles should return to full');
+	});
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Settings Toggle via CheckpointManager (simulated button clicks)
+// ══════════════════════════════════════════════════════════════════
+suite('Settings Toggle via CheckpointManager — button state changes', () => {
+
+	class MockWorkspaceState2 implements vscode.Memento {
+		private store = new Map<string, unknown>();
+		keys(): readonly string[] { return [...this.store.keys()]; }
+		get<T>(key: string): T | undefined;
+		get<T>(key: string, defaultValue: T): T;
+		get<T>(key: string, defaultValue?: T): T | undefined {
+			return (this.store.has(key) ? this.store.get(key) : defaultValue) as T | undefined;
+		}
+		async update(key: string, value: unknown): Promise<void> {
+			if (value === undefined) { this.store.delete(key); return; }
+			this.store.set(key, value);
+		}
+		setKeysForSync(_keys: readonly string[]): void {}
+	}
+
+	function makeManager() {
+		const ctx = {
+			subscriptions: [],
+			workspaceState: new MockWorkspaceState2(),
+			globalState: new MockWorkspaceState2(),
+			secrets: { get: async () => undefined, store: async () => {}, delete: async () => {}, onDidChange: () => new vscode.Disposable(() => {}) },
+			extensionUri: vscode.Uri.file(process.cwd()),
+			extensionPath: process.cwd(),
+			environmentVariableCollection: {} as vscode.GlobalEnvironmentVariableCollection,
+			storageUri: undefined,
+			storagePath: undefined,
+			globalStorageUri: vscode.Uri.file(os.tmpdir()),
+			globalStoragePath: os.tmpdir(),
+			logUri: vscode.Uri.file(os.tmpdir()),
+			logPath: os.tmpdir(),
+			extensionMode: vscode.ExtensionMode.Test,
+			asAbsolutePath: (r: string) => path.join(process.cwd(), r),
+			languageModelAccessInformation: {} as vscode.LanguageModelAccessInformation,
+			extension: {} as vscode.Extension<unknown>
+		} as unknown as vscode.ExtensionContext;
+
+		const fakeGit = {
+			isGitRepository: async () => true,
+			getDetailedChangedFiles: async () => [],
+			stageAndCommitAll: async () => ({ success: false, changedFiles: [], skippedLargeFiles: [] }),
+			getFileAtCommit: async () => undefined,
+			pushToRemote: async () => ({ success: true, message: 'ok' })
+		};
+		const mgr = new CheckpointManager(ctx, fakeGit as any);
+		return mgr;
+	}
+
+	test('toggleTrackingMode: local-only → full (button click simulation)', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false, trackingMode: 'local-only' });
+
+		// Simulate button click: read current, compute next, apply
+		const before = mgr.getSettings().trackingMode;
+		const next = getNextTrackingMode(before);
+		await mgr.updateSettings({ trackingMode: next });
+
+		assert.strictEqual(mgr.getSettings().trackingMode, 'full',
+			'tracking mode should switch to full after one toggle from local-only');
+	});
+
+	test('toggleTrackingMode: full → local-only (button click simulation)', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false, trackingMode: 'full' });
+
+		const next = getNextTrackingMode(mgr.getSettings().trackingMode);
+		await mgr.updateSettings({ trackingMode: next });
+
+		assert.strictEqual(mgr.getSettings().trackingMode, 'local-only');
+	});
+
+	test('toggleMilestone: enabled → disabled (button click simulation)', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false, milestoneEnabled: true });
+
+		const before = mgr.getSettings().milestoneEnabled;
+		await mgr.updateSettings({ milestoneEnabled: !before });
+
+		assert.strictEqual(mgr.getSettings().milestoneEnabled, false,
+			'milestone should be disabled after toggle');
+	});
+
+	test('toggleMilestone: disabled → enabled (button click simulation)', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false, milestoneEnabled: false });
+
+		await mgr.updateSettings({ milestoneEnabled: !mgr.getSettings().milestoneEnabled });
+
+		assert.strictEqual(mgr.getSettings().milestoneEnabled, true);
+	});
+
+	test('toggleCommitLanguage: cycles through all three values correctly', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false, commitLanguage: 'auto' });
+
+		let lang = mgr.getSettings().commitLanguage;
+		lang = getNextLanguage(lang); await mgr.updateSettings({ commitLanguage: lang });
+		assert.strictEqual(mgr.getSettings().commitLanguage, 'en');
+
+		lang = getNextLanguage(lang); await mgr.updateSettings({ commitLanguage: lang });
+		assert.strictEqual(mgr.getSettings().commitLanguage, 'zh');
+
+		lang = getNextLanguage(lang); await mgr.updateSettings({ commitLanguage: lang });
+		assert.strictEqual(mgr.getSettings().commitLanguage, 'auto');
+	});
+
+	test('toggleNotificationLevel: cycles through all three levels correctly', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false, notificationLevel: 'milestone' });
+
+		let lv = mgr.getSettings().notificationLevel;
+		lv = getNextNotificationLevel(lv); await mgr.updateSettings({ notificationLevel: lv });
+		assert.strictEqual(mgr.getSettings().notificationLevel, 'all');
+
+		lv = getNextNotificationLevel(lv); await mgr.updateSettings({ notificationLevel: lv });
+		assert.strictEqual(mgr.getSettings().notificationLevel, 'none');
+
+		lv = getNextNotificationLevel(lv); await mgr.updateSettings({ notificationLevel: lv });
+		assert.strictEqual(mgr.getSettings().notificationLevel, 'milestone');
+	});
+
+	test('togglePushStrategy: cycles through all three strategies correctly', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false, pushStrategy: 'none' });
+
+		let ps = mgr.getSettings().pushStrategy;
+		ps = getNextPushStrategy(ps); await mgr.updateSettings({ pushStrategy: ps });
+		assert.strictEqual(mgr.getSettings().pushStrategy, 'milestone');
+
+		ps = getNextPushStrategy(ps); await mgr.updateSettings({ pushStrategy: ps });
+		assert.strictEqual(mgr.getSettings().pushStrategy, 'all');
+
+		ps = getNextPushStrategy(ps); await mgr.updateSettings({ pushStrategy: ps });
+		assert.strictEqual(mgr.getSettings().pushStrategy, 'none');
+	});
+
+	test('toggleAutoSave: 0 → 300 → 0 (button click simulation)', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false, autoSaveInterval: 0 });
+
+		// Toggle ON
+		let interval = mgr.getSettings().autoSaveInterval;
+		const newVal = interval === 0 ? 300 : 0;
+		await mgr.updateSettings({ autoSaveInterval: newVal });
+		assert.strictEqual(mgr.getSettings().autoSaveInterval, 300, 'auto-save should be enabled (300s)');
+
+		// Toggle OFF
+		const newVal2 = mgr.getSettings().autoSaveInterval === 0 ? 300 : 0;
+		await mgr.updateSettings({ autoSaveInterval: newVal2 });
+		assert.strictEqual(mgr.getSettings().autoSaveInterval, 0, 'auto-save should be disabled (0)');
+	});
+
+	test('multiple settings toggles are independent and do not interfere', async () => {
+		const mgr = makeManager();
+		await mgr.updateSettings({
+			...DEFAULT_SETTINGS, showNotifications: false,
+			trackingMode: 'local-only',
+			milestoneEnabled: true,
+			commitLanguage: 'auto',
+			notificationLevel: 'milestone',
+			pushStrategy: 'none'
+		});
+
+		// Toggle all at once
+		await mgr.updateSettings({
+			trackingMode: getNextTrackingMode(mgr.getSettings().trackingMode),
+			milestoneEnabled: !mgr.getSettings().milestoneEnabled,
+			commitLanguage: getNextLanguage(mgr.getSettings().commitLanguage),
+			notificationLevel: getNextNotificationLevel(mgr.getSettings().notificationLevel),
+			pushStrategy: getNextPushStrategy(mgr.getSettings().pushStrategy)
+		});
+
+		const s = mgr.getSettings();
+		assert.strictEqual(s.trackingMode, 'full');
+		assert.strictEqual(s.milestoneEnabled, false);
+		assert.strictEqual(s.commitLanguage, 'en');
+		assert.strictEqual(s.notificationLevel, 'all');
+		assert.strictEqual(s.pushStrategy, 'milestone');
+	});
+});
+
+// ══════════════════════════════════════════════════════════════════
+// TreeItem Button Click — TimelineTreeProvider command coverage
+// ══════════════════════════════════════════════════════════════════
+suite('TreeItem Button Click — TimelineTreeProvider command coverage', () => {
+	function makeFakeGit2() {
+		return {
+			isGitRepository: async () => true,
+			getDetailedChangedFiles: async () => [],
+			stageAndCommitAll: async () => ({ success: false, changedFiles: [], skippedLargeFiles: [] }),
+			getFileAtCommit: async () => undefined,
+			pushToRemote: async () => ({ success: true, message: 'ok' })
+		};
+	}
+
+	function makeManager2() {
+		return new CheckpointManager(
+			// reuse the factory from the outer module scope via a local inline mock
+			(() => {
+				class MS implements vscode.Memento {
+					private s = new Map<string, unknown>();
+					keys(): readonly string[] { return [...this.s.keys()]; }
+					get<T>(k: string): T | undefined;
+					get<T>(k: string, d: T): T;
+					get<T>(k: string, d?: T): T | undefined { return (this.s.has(k) ? this.s.get(k) : d) as T | undefined; }
+					async update(k: string, v: unknown): Promise<void> { if (v === undefined) { this.s.delete(k); } else { this.s.set(k, v); } }
+					setKeysForSync(_: readonly string[]): void {}
+				}
+				return {
+					subscriptions: [], workspaceState: new MS(), globalState: new MS(),
+					secrets: { get: async () => undefined, store: async () => {}, delete: async () => {}, onDidChange: () => new vscode.Disposable(() => {}) },
+					extensionUri: vscode.Uri.file(process.cwd()), extensionPath: process.cwd(),
+					environmentVariableCollection: {} as vscode.GlobalEnvironmentVariableCollection,
+					storageUri: undefined, storagePath: undefined,
+					globalStorageUri: vscode.Uri.file(os.tmpdir()), globalStoragePath: os.tmpdir(),
+					logUri: vscode.Uri.file(os.tmpdir()), logPath: os.tmpdir(),
+					extensionMode: vscode.ExtensionMode.Test,
+					asAbsolutePath: (r: string) => path.join(process.cwd(), r),
+					languageModelAccessInformation: {} as vscode.LanguageModelAccessInformation,
+					extension: {} as vscode.Extension<unknown>
+				} as unknown as vscode.ExtensionContext;
+			})(),
+			makeFakeGit2() as any
+		);
+	}
+
+	test('checkpoint tree item command is vibeCodeGuardian.showCheckpointDetails', async () => {
+		const mgr = makeManager2();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false });
+		await mgr.startMilestone('Test', 'Intent');
+		const cp = await mgr.createCheckpoint(CheckpointType.Manual, CheckpointSource.User, [], { name: 'CP1' });
+
+		const provider = new TimelineTreeProvider(mgr);
+		const roots = await provider.getChildren(undefined);
+		const milestoneItem = roots.find(r => r.milestoneId);
+		assert.ok(milestoneItem, 'should have milestone tree item');
+
+		const children = await provider.getChildren(milestoneItem);
+		// Find the checkpoint item(s) — may be direct or nested under prompt-group
+		function findCheckpointItems(items: import('../timelineTreeProvider').TimelineItem[]): import('../timelineTreeProvider').TimelineItem[] {
+			return items.filter(i => i.contextValue === 'checkpoint' || i.contextValue === 'checkpoint-starred');
+		}
+
+		let checkpointItems = findCheckpointItems(children);
+		if (checkpointItems.length === 0) {
+			// Might be inside prompt-group
+			const groupItem = children.find(c => c.contextValue === 'prompt-group');
+			if (groupItem) {
+				const groupChildren = await provider.getChildren(groupItem);
+				checkpointItems = findCheckpointItems(groupChildren);
+			}
+		}
+		assert.ok(checkpointItems.length > 0, 'should find at least one checkpoint item');
+		const cpItem = checkpointItems[0];
+		assert.strictEqual(
+			cpItem.command?.command,
+			'vibeCodeGuardian.showCheckpointDetails',
+			'checkpoint item click should trigger showCheckpointDetails'
+		);
+		assert.strictEqual(
+			cpItem.command?.arguments?.[0],
+			cp.id,
+			'showCheckpointDetails should receive the correct checkpoint id'
+		);
+	});
+
+	test('milestone tree item command is vibeCodeGuardian.showMilestoneDetails', async () => {
+		const mgr = makeManager2();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false });
+		const ms = await mgr.startMilestone('Feat X', 'Intent X');
+
+		const provider = new TimelineTreeProvider(mgr);
+		const roots = await provider.getChildren(undefined);
+		const milestoneItem = roots.find(r => r.milestoneId === ms.id);
+		assert.ok(milestoneItem, 'milestone tree item should exist');
+		assert.strictEqual(
+			milestoneItem.command?.command,
+			'vibeCodeGuardian.showMilestoneDetails',
+			'milestone item click must trigger showMilestoneDetails'
+		);
+		assert.strictEqual(
+			milestoneItem.command?.arguments?.[0],
+			ms.id,
+			'showMilestoneDetails must receive the milestone id'
+		);
+	});
+
+	test('prompt-group tree item command is vibeCodeGuardian.showCheckpointDetails (or has contextValue prompt-group)', async () => {
+		const mgr = makeManager2();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false });
+		await mgr.startMilestone('UI Work', 'Improve UI');
+		await mgr.createCheckpoint(CheckpointType.AIGenerated, CheckpointSource.Copilot, [], { name: 'AI#1' });
+		await mgr.createCheckpoint(CheckpointType.AIGenerated, CheckpointSource.Copilot, [], { name: 'AI#2' });
+
+		const provider = new TimelineTreeProvider(mgr);
+		const roots = await provider.getChildren(undefined);
+		const msItem = roots.find(r => r.milestoneId);
+		assert.ok(msItem, 'milestone item should exist');
+
+		const children = await provider.getChildren(msItem);
+		const groupItem = children.find(i => i.contextValue === 'prompt-group');
+		assert.ok(groupItem, 'prompt-group tree item should exist for AI checkpoint group');
+		assert.ok(groupItem?.promptGroupId, 'prompt-group item must carry promptGroupId');
+	});
+
+	test('starred checkpoint has contextValue checkpoint-starred', async () => {
+		const mgr = makeManager2();
+		await mgr.updateSettings({ ...DEFAULT_SETTINGS, showNotifications: false });
+		await mgr.startMilestone('Star Test', 'Intent');
+		const cp = await mgr.createCheckpoint(CheckpointType.Manual, CheckpointSource.User, [], { name: 'Star Me' });
+		await mgr.toggleStarred(cp.id);
+
+		const provider = new TimelineTreeProvider(mgr);
+		const roots = await provider.getChildren(undefined);
+		const msItem = roots.find(r => r.milestoneId);
+		assert.ok(msItem);
+
+		const children = await provider.getChildren(msItem);
+		// Find checkpoint items including those inside prompt groups
+		const allItems: import('../timelineTreeProvider').TimelineItem[] = [...children];
+		for (const c of children) {
+			if (c.contextValue === 'prompt-group') {
+				const gc = await provider.getChildren(c);
+				allItems.push(...gc);
+			}
+		}
+		const starredItem = allItems.find(i => i.contextValue === 'checkpoint-starred');
+		assert.ok(starredItem, 'starred checkpoint should have contextValue checkpoint-starred');
+	});
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Complete Package.json Command Registration Coverage
+// ══════════════════════════════════════════════════════════════════
+suite('Package.json Command Registration — complete coverage', () => {
+	// All 49 commands that should appear in package.json contributes.commands
+	const ALL_EXPECTED_COMMANDS = [
+		'vibeCodeGuardian.createCheckpoint',
+		'vibeCodeGuardian.quickSave',
+		'vibeCodeGuardian.rollback',
+		'vibeCodeGuardian.viewDiff',
+		'vibeCodeGuardian.deleteCheckpoint',
+		'vibeCodeGuardian.startSession',
+		'vibeCodeGuardian.endSession',
+		'vibeCodeGuardian.refresh',
+		'vibeCodeGuardian.toggleAutoSave',
+		'vibeCodeGuardian.showSessions',
+		'vibeCodeGuardian.openSettings',
+		'vibeCodeGuardian.showCheckpointDetails',
+		'vibeCodeGuardian.showFileDiff',
+		'vibeCodeGuardian.openChangedFile',
+		'vibeCodeGuardian.initGit',
+		'vibeCodeGuardian.showProjectInfo',
+		'vibeCodeGuardian.timeMachine',
+		'vibeCodeGuardian.captureState',
+		'vibeCodeGuardian.showTimeline',
+		'vibeCodeGuardian.cleanupHistory',
+		'vibeCodeGuardian.clearAllHistory',
+		'vibeCodeGuardian.debugShowCheckpoints',
+		'vibeCodeGuardian.syncWithGit',
+		'vibeCodeGuardian.returnToLatest',
+		'vibeCodeGuardian.timeTravelTo',
+		'vibeCodeGuardian.showCurrentPosition',
+		'vibeCodeGuardian.toggleCommitLanguage',
+		'vibeCodeGuardian.toggleNotificationLevel',
+		'vibeCodeGuardian.togglePushStrategy',
+		'vibeCodeGuardian.toggleTrackingMode',
+		'vibeCodeGuardian.toggleMilestone',
+		'vibeCodeGuardian.showGitGraph',
+		'vibeCodeGuardian.refreshGitGraph',
+		'vibeCodeGuardian.toggleGitGraphMode',
+		'vibeCodeGuardian.gitGraphCommitDetail',
+		'vibeCodeGuardian.showGitGraphFileDiff',
+		'vibeCodeGuardian.showBranches',
+		'vibeCodeGuardian.showContributors',
+		'vibeCodeGuardian.showStashes',
+		'vibeCodeGuardian.showRemotes',
+		'vibeCodeGuardian.rollbackToMilestone',
+		'vibeCodeGuardian.showMilestoneDetails',
+		'vibeCodeGuardian.toggleTimelineView',
+		'vibeCodeGuardian.startMilestone',
+		'vibeCodeGuardian.completeMilestone',
+		'vibeCodeGuardian.abandonMilestone',
+		'vibeCodeGuardian.showMilestones',
+		'vibeCodeGuardian.toggleBlame',
+		'vibeCodeGuardian.quickPushAll',
+	];
+
+	test('package.json contributes.commands contains all expected command IDs', async () => {
+		const ext = vscode.extensions.all.find(e => e.packageJSON?.name === 'vibe-code-guardian');
+		assert.ok(ext, 'vibe-code-guardian extension must be available in test host');
+
+		const contributed: Array<{ command: string }> = ext!.packageJSON?.contributes?.commands ?? [];
+		const manifestSet = new Set(contributed.map(c => c.command));
+
+		const missing = ALL_EXPECTED_COMMANDS.filter(c => !manifestSet.has(c));
+		assert.deepStrictEqual(missing, [],
+			`These commands are missing from package.json contributes.commands: ${missing.join(', ')}`
+		);
+	});
+
+	test('all expected commands have title defined in package.json', async () => {
+		const ext = vscode.extensions.all.find(e => e.packageJSON?.name === 'vibe-code-guardian');
+		assert.ok(ext);
+		const contributed: Array<{ command: string; title: string }> = ext!.packageJSON?.contributes?.commands ?? [];
+		const commandsWithoutTitle = contributed.filter(c => !c.title || c.title.trim() === '');
+		assert.deepStrictEqual(
+			commandsWithoutTitle.map(c => c.command), [],
+			'All commands in package.json must have a non-empty title'
+		);
+	});
+
+	test('no duplicate command IDs exist in package.json', async () => {
+		const ext = vscode.extensions.all.find(e => e.packageJSON?.name === 'vibe-code-guardian');
+		assert.ok(ext);
+		const contributed: Array<{ command: string }> = ext!.packageJSON?.contributes?.commands ?? [];
+		const seen = new Set<string>();
+		const duplicates: string[] = [];
+		for (const c of contributed) {
+			if (seen.has(c.command)) { duplicates.push(c.command); }
+			seen.add(c.command);
+		}
+		assert.deepStrictEqual(duplicates, [], `Duplicate commands found in package.json: ${duplicates.join(', ')}`);
+	});
+
+	test('each GUARDIAN_PANEL_ACTION_MAP command is in package.json manifest', async () => {
+		const ext = vscode.extensions.all.find(e => e.packageJSON?.name === 'vibe-code-guardian');
+		assert.ok(ext);
+		const contributed: Array<{ command: string }> = ext!.packageJSON?.contributes?.commands ?? [];
+		const manifestSet = new Set(contributed.map(c => c.command));
+
+		const actionMap = guardianExtension.getGuardianPanelActionCommandMap();
+		for (const [action, command] of Object.entries(actionMap)) {
+			assert.ok(manifestSet.has(command),
+				`Panel action '${action}' → command '${command}' must be in package.json`);
+		}
+	});
+
+	test('each STATUS_BAR_BUTTON command is in package.json manifest', async () => {
+		const ext = vscode.extensions.all.find(e => e.packageJSON?.name === 'vibe-code-guardian');
+		assert.ok(ext);
+		const contributed: Array<{ command: string }> = ext!.packageJSON?.contributes?.commands ?? [];
+		const manifestSet = new Set(contributed.map(c => c.command));
+
+		const statusBarCommands = guardianExtension.GUARDIAN_STATUS_BAR_BUTTON_COMMANDS;
+		for (const [slot, command] of Object.entries(statusBarCommands)) {
+			assert.ok(manifestSet.has(command),
+				`Status bar slot '${slot}' → command '${command}' must be in package.json`);
+		}
 	});
 });

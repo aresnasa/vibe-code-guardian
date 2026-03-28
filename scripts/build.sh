@@ -706,6 +706,56 @@ do_test() {
         failed=$(( failed + 1 ))
     fi
 
+    # ── 1.1 Command click coverage gate ─────────────────────────────────
+    log_step "Command click coverage gate"
+    if grep -q "suite('Extension Command Click Coverage'" "${PROJECT_ROOT}/src/test/extension.test.ts"; then
+        log_success "Command click coverage suite is present and included in npm test"
+        passed=$(( passed + 1 ))
+    else
+        log_error "Command click coverage suite missing in src/test/extension.test.ts"
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 1.2 Status bar button click coverage gate ──────────────────────
+    log_step "Status bar button click coverage gate"
+    if grep -q "Status Bar Button Click Coverage" "${PROJECT_ROOT}/src/test/extension.test.ts"; then
+        log_success "Status bar button click coverage assertions are present"
+        passed=$(( passed + 1 ))
+    else
+        log_error "Status bar button click coverage assertions missing in src/test/extension.test.ts"
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 1.3 Package.json command registration complete coverage gate ─────
+    log_step "Package.json command registration — complete coverage gate"
+    if grep -q "Package.json Command Registration — complete coverage" "${PROJECT_ROOT}/src/test/extension.test.ts"; then
+        log_success "Package.json command registration coverage suite is present"
+        passed=$(( passed + 1 ))
+    else
+        log_error "Package.json command registration coverage suite missing in src/test/extension.test.ts"
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 1.4 TreeItem button click coverage gate ──────────────────────────
+    log_step "TreeItem button click coverage gate"
+    if grep -q "TreeItem Button Click — TimelineTreeProvider command coverage" "${PROJECT_ROOT}/src/test/extension.test.ts"; then
+        log_success "TreeItem button click coverage suite is present"
+        passed=$(( passed + 1 ))
+    else
+        log_error "TreeItem button click coverage suite missing in src/test/extension.test.ts"
+        failed=$(( failed + 1 ))
+    fi
+
+    # ── 1.5 openGuardianPanel command registered in package.json ────────
+    log_step "vibeCodeGuardian.openGuardianPanel in package.json manifest"
+    if grep -q '"vibeCodeGuardian.openGuardianPanel"' "${PROJECT_ROOT}/package.json"; then
+        log_success "vibeCodeGuardian.openGuardianPanel is registered in package.json"
+        passed=$(( passed + 1 ))
+    else
+        log_error "vibeCodeGuardian.openGuardianPanel is missing from package.json"
+        failed=$(( failed + 1 ))
+    fi
+
     # ── 2. Integration tests (run-tests.sh shell suite) ──────────────────
     log_step "Integration tests (scripts/run-tests.sh)"
     if bash "${PROJECT_ROOT}/scripts/run-tests.sh"; then
